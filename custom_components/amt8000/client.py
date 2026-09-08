@@ -17,6 +17,7 @@ _SRC = [0x8F, 0xE0]
 _CMD_AUTH       = [0xF0, 0xF0]
 _CMD_STATUS     = [0x0B, 0x4A]
 _CMD_ARM        = [0x40, 0x1E]
+_CMD_BYPASS     = [0x40, 0x1F]
 _CMD_DISCONNECT = [0xF0, 0xF1]
 
 _SUBCMD_DISARM = 0x00
@@ -38,6 +39,10 @@ class InvalidAuth(Exception):
 
 class OpenZones(Exception):
     """Raised when arm is blocked because zones are open."""
+
+
+class BypassError(Exception):
+    """Raised when the panel rejects a zone bypass command."""
 
 
 @dataclasses.dataclass
@@ -178,6 +183,32 @@ class Amt8000Client:
 
     async def disarm_partition(self, partition_idx: int) -> None:
         await self._arm_cmd(partition_idx, _SUBCMD_DISARM)
+
+    async def bypass_zones(self, zone_indices: list[int]) -> None:
+        """Bypass zones before a confirmed automatic arm retry."""
+        if not zone_indices or any(not 0 <= index < 56 for index in zone_indices):
+            raise BypassError("Invalid zone index")
+
+        reader, writer = await self._connect_and_auth()
+        try:
+            for zone_index in zone_indices:
+                writer.write(self._packet(_CMD_BYPASS, [zone_index, 0x01]))
+                await writer.drain()
+                response = await self._read_frame(reader)
+                if len(response) < 8:
+                    raise BypassError("Invalid bypass response")
+
+                response_cmd = int.from_bytes(response[6:8], "big")
+                if response_cmd == 0xF0FD:
+                    error_code = response[8] if len(response) > 8 else 0
+                    messages = {
+                        0xE6: "Bypass denied",
+                        0xE8: "Bypass denied while panel is armed",
+                        55: "Bypass permission denied",
+                    }
+                    raise BypassError(messages.get(error_code, f"Bypass failed: {error_code}"))
+        finally:
+            await self._disconnect(writer)
 
     async def _arm_cmd(self, partition_idx: int, subcmd: int) -> None:
         reader, writer = await self._connect_and_auth()

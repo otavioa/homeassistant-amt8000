@@ -34,6 +34,7 @@ Native Home Assistant integration for the **Intelbras AMT 8000** alarm panel, co
 | `alarm_control_panel.amt8000_partition_N` | Alarm panel | One per configured partition. Arm Away / Disarm. |
 | `binary_sensor.amt8000_zone_N` | Binary sensor | Open / closed. Extra attrs: violated, bypassed, tamper, low_battery. |
 | `binary_sensor.amt8000_siren` | Binary sensor (sound) | True while siren is actively sounding. |
+| `switch.amt8000_allow_open_zone_bypass` | Switch | Allows automatic bypass of open zones when arming. Off by default. |
 | `event.amt8000_alarm` | Event | Fires `alarm_triggered` on siren rising edge. |
 
 ## Protocol notes
