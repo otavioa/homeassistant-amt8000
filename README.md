@@ -7,7 +7,7 @@ Native Home Assistant integration for the **Intelbras AMT 8000** alarm panel, co
 
 ## Features
 
-- **Arm / Disarm per group** — individual control of each configured partition
+- **Arm / Disarm per partition** — individual control of each configured partition
 - **Zone monitoring** — binary sensor per zone (open / closed / violated)
 - **Live siren detection** — binary sensor + event entity for automations
 - **Device triggers** — "Alarm triggered" trigger in the automation UI (no YAML needed)
@@ -31,7 +31,7 @@ Native Home Assistant integration for the **Intelbras AMT 8000** alarm panel, co
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `alarm_control_panel.amt8000_group_N` | Alarm panel | One per configured group. Arm Away / Disarm. |
+| `alarm_control_panel.amt8000_partition_N` | Alarm panel | One per configured partition. Arm Away / Disarm. |
 | `binary_sensor.amt8000_zone_N` | Binary sensor | Open / closed. Extra attrs: violated, bypassed, tamper, low_battery. |
 | `binary_sensor.amt8000_siren` | Binary sensor (sound) | True while siren is actively sounding. |
 | `event.amt8000_alarm` | Event | Fires `alarm_triggered` on siren rising edge. |
@@ -40,7 +40,7 @@ Native Home Assistant integration for the **Intelbras AMT 8000** alarm panel, co
 
 The AMT 8000 uses **ISECNet v2** (TCP 9009), which is distinct from the `0xe7` protocol used by lower-end AMT models (1016/2018 NET).
 
-Partition index 0 in the protocol is a read-only AND-aggregate (armed only when all groups are armed) and is intentionally excluded from HA entities. User groups start at protocol index 1.
+Partition index 0 in the protocol is a read-only AND-aggregate (armed only when all real partitions are armed) and is intentionally excluded from HA entities. User partitions start at protocol index 1.
 
 Full protocol documentation in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 

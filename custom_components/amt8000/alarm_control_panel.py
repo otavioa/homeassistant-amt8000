@@ -1,4 +1,4 @@
-"""Alarm control panel entities — one per user partition (groups 1-N)."""
+"""Alarm control panel entities — one per user partition (1-N)."""
 from __future__ import annotations
 
 from homeassistant.components.alarm_control_panel import (
@@ -55,10 +55,9 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
         super().__init__(coordinator)
         self._partition_idx = partition_idx
         self._entry = entry
-        # User-visible group number: skip the aggregate at index 0
-        group_num = partition_idx  # idx 1 → "Group 1", idx 2 → "Group 2", etc.
+        # User-visible partition number: skip the aggregate at index 0
         self._attr_unique_id = f"{entry.entry_id}_partition_{partition_idx}"
-        self._attr_name = f"Group {group_num}"
+        self._attr_name = f"Partition {partition_idx}"
         self._attr_device_info = _device_info(entry)
 
     def _partition(self):
@@ -84,7 +83,7 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
         try:
             await self.coordinator.client.arm_partition(self._partition_idx)
         except OpenZones:
-            _LOGGER.warning("Group %d: arm blocked — open zones", self._partition_idx)
+            _LOGGER.warning("Partition %d: arm blocked — open zones", self._partition_idx)
         await self.coordinator.async_request_refresh()
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
@@ -93,7 +92,7 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
 
 
 class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPanelEntity):
-    """Virtual panel that arms/disarms all user groups at once."""
+    """Virtual panel that arms/disarms all user partitions at once."""
 
     _attr_has_entity_name = True
     _attr_supported_features = AlarmControlPanelEntityFeature.ARM_AWAY
@@ -103,7 +102,7 @@ class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPane
     def __init__(self, coordinator: Amt8000Coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_all"
-        self._attr_name = "All Groups"
+        self._attr_name = "All Partitions"
         self._attr_device_info = _device_info(entry)
 
     def _real_partitions(self):
