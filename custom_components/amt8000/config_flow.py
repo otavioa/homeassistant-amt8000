@@ -11,8 +11,8 @@ from .client import Amt8000Client, CannotConnect, InvalidAuth
 from .const import DEFAULT_PORT, DOMAIN
 
 _DEVICE_CLASS_OPTIONS = [
-    selector.SelectOptionDict(value="", label="On/Off (default)"),
-    selector.SelectOptionDict(value="door", label="Door — Open/Closed"),
+    selector.SelectOptionDict(value="", label="On/Off"),
+    selector.SelectOptionDict(value="door", label="Door — Open/Closed (default)"),
     selector.SelectOptionDict(value="window", label="Window — Open/Closed"),
     selector.SelectOptionDict(value="motion", label="Motion — Detected/Clear"),
     selector.SelectOptionDict(value="smoke", label="Smoke — Detected/Clear"),
@@ -77,7 +77,7 @@ class Amt8000OptionsFlow(OptionsFlow):
         fields: dict = {}
         for zone in zones:
             key = f"zone_{zone.number}_device_class"
-            fields[vol.Optional(key, default=self.config_entry.options.get(key, ""))] = (
+            fields[vol.Optional(key, default=self.config_entry.options.get(key, "door"))] = (
                 selector.SelectSelector(
                     selector.SelectSelectorConfig(options=_DEVICE_CLASS_OPTIONS)
                 )
