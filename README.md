@@ -51,5 +51,5 @@ MIT
 
 [hacs-shield]: https://img.shields.io/badge/HACS-Custom-orange.svg
 [hacs-url]: https://hacs.xyz
-[release-shield]: https://img.shields.io/github/release/fdaneluzzi/homeassistant-amt8000.svg
-[release-url]: https://github.com/fdaneluzzi/homeassistant-amt8000/releases
+[release-shield]: https://img.shields.io/github/v/release/otavioa/homeassistant-amt8000.svg
+[release-url]: https://github.com/otavioa/homeassistant-amt8000/releases
