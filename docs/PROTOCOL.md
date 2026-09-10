@@ -55,12 +55,12 @@ if len(password) == 4:
 | Value | State |
 |-------|-------|
 | `0` | Disarmed |
-| `1` | Partial (some groups armed) |
-| `3` | Armed away (all groups armed) |
+| `1` | Partial (some partitions armed) |
+| `3` | Armed away (all partitions armed) |
 
 ## Partition index 0 — AND aggregate
 
-Protocol partition index 0 is not a user-configurable group. Its `armed` bit mirrors `AND(all other enabled partitions)`: it is armed only when every real group is armed. Confirmed via live observation across all arm/disarm combinations. User groups start at index 1.
+Protocol partition index 0 is not a user-configurable partition. Its `armed` bit mirrors `AND(all other enabled partitions)`: it is armed only when every real partition is armed. Confirmed via live observation across all arm/disarm combinations. User partitions start at index 1.
 
 ## References
 

@@ -25,6 +25,7 @@ class Amt8000Coordinator(DataUpdateCoordinator[PanelStatus]):
         self._prev_siren = False
         self._consecutive_failures = 0
         self._last_status: PanelStatus | None = None
+        self.allow_open_zone_bypass = False
 
     async def _async_update_data(self) -> PanelStatus:
         try:

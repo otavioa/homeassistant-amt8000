@@ -1,6 +1,9 @@
-"""Alarm control panel entities — one per user partition (groups 1-N)."""
+"""Alarm control panel entities — one per user partition (1-N)."""
 from __future__ import annotations
 
+from homeassistant.components.persistent_notification import (
+    DOMAIN as PERSISTENT_NOTIFICATION_DOMAIN,
+)
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
     AlarmControlPanelEntityFeature,
@@ -13,12 +16,103 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import ALL_PARTITIONS, OpenZones
+from .client import ALL_PARTITIONS, BypassError, OpenZones
 from .const import AGGREGATE_PARTITION_IDX, DOMAIN
 from .coordinator import Amt8000Coordinator
 
 import logging
 _LOGGER = logging.getLogger(__name__)
+
+
+def _open_zones(coordinator: Amt8000Coordinator) -> list:
+    return [zone for zone in coordinator.data.zones if zone.open and not zone.bypassed]
+
+
+async def _notify_open_zones(
+    entity: CoordinatorEntity[Amt8000Coordinator],
+    partition_idx: int,
+    zones: list,
+    message: str,
+) -> None:
+    zone_names = ", ".join(f"Zona {zone.number}" for zone in zones)
+    await entity.hass.services.async_call(
+        PERSISTENT_NOTIFICATION_DOMAIN,
+        "create",
+        {
+            "title": "Zonas abertas",
+            "message": f"{message}\n\n{zone_names}",
+            "notification_id": f"{DOMAIN}_open_zones_{entity._entry.entry_id}_{partition_idx}",
+        },
+    )
+
+
+async def _dismiss_open_zone_notification(
+    entity: CoordinatorEntity[Amt8000Coordinator], partition_idx: int
+) -> None:
+    await entity.hass.services.async_call(
+        PERSISTENT_NOTIFICATION_DOMAIN,
+        "dismiss",
+        {
+            "notification_id": f"{DOMAIN}_open_zones_{entity._entry.entry_id}_{partition_idx}",
+        },
+    )
+
+
+async def _arm_with_open_zone_policy(
+    entity: CoordinatorEntity[Amt8000Coordinator], partition_idx: int
+) -> None:
+    zones = _open_zones(entity.coordinator)
+    if not zones:
+        await _notify_open_zones(
+            entity,
+            partition_idx,
+            [],
+            "A central recusou o arme por zona aberta, mas o último status não as identificou.",
+        )
+        return
+
+    if not entity.coordinator.allow_open_zone_bypass:
+        await _notify_open_zones(
+            entity,
+            partition_idx,
+            zones,
+            "O arme foi bloqueado. Ative 'Allow Open Zone Bypass' para permitir o bypass automático.",
+        )
+        return
+
+    try:
+        await entity.coordinator.client.bypass_zones([zone.number - 1 for zone in zones])
+        await entity.coordinator.client.arm_partition(partition_idx)
+    except BypassError as exc:
+        _LOGGER.warning("Automatic open-zone bypass was rejected: %s", exc)
+        await _notify_open_zones(
+            entity,
+            partition_idx,
+            zones,
+            "O bypass automático foi recusado pela central.",
+        )
+        return
+    except OpenZones:
+        _LOGGER.warning("The panel still reports open zones after automatic bypass")
+        await _notify_open_zones(
+            entity,
+            partition_idx,
+            zones,
+            "A central ainda identificou zonas abertas após o bypass.",
+        )
+        return
+    except Exception:
+        _LOGGER.exception("Unexpected error during automatic open-zone bypass")
+        await _notify_open_zones(
+            entity,
+            partition_idx,
+            zones,
+            "Não foi possível concluir o bypass automático. Consulte os logs.",
+        )
+        return
+
+    await _dismiss_open_zone_notification(entity, partition_idx)
+    await entity.coordinator.async_request_refresh()
 
 
 async def async_setup_entry(
@@ -55,10 +149,9 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
         super().__init__(coordinator)
         self._partition_idx = partition_idx
         self._entry = entry
-        # User-visible group number: skip the aggregate at index 0
-        group_num = partition_idx  # idx 1 → "Group 1", idx 2 → "Group 2", etc.
+        # User-visible partition number: skip the aggregate at index 0
         self._attr_unique_id = f"{entry.entry_id}_partition_{partition_idx}"
-        self._attr_name = f"Group {group_num}"
+        self._attr_name = f"Partition {partition_idx}"
         self._attr_device_info = _device_info(entry)
 
     def _partition(self):
@@ -84,7 +177,9 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
         try:
             await self.coordinator.client.arm_partition(self._partition_idx)
         except OpenZones:
-            _LOGGER.warning("Group %d: arm blocked — open zones", self._partition_idx)
+            _LOGGER.warning("Partition %d: arm blocked — open zones", self._partition_idx)
+            await _arm_with_open_zone_policy(self, self._partition_idx)
+            return
         await self.coordinator.async_request_refresh()
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
@@ -93,7 +188,7 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
 
 
 class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPanelEntity):
-    """Virtual panel that arms/disarms all user groups at once."""
+    """Virtual panel that arms/disarms all user partitions at once."""
 
     _attr_has_entity_name = True
     _attr_supported_features = AlarmControlPanelEntityFeature.ARM_AWAY
@@ -103,7 +198,7 @@ class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPane
     def __init__(self, coordinator: Amt8000Coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_all"
-        self._attr_name = "All Groups"
+        self._attr_name = "All Partitions"
         self._attr_device_info = _device_info(entry)
 
     def _real_partitions(self):
@@ -132,6 +227,8 @@ class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPane
             await self.coordinator.client.arm_partition(ALL_PARTITIONS)
         except OpenZones:
             _LOGGER.warning("Master arm blocked — open zones")
+            await _arm_with_open_zone_policy(self, ALL_PARTITIONS)
+            return
         await self.coordinator.async_request_refresh()
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:

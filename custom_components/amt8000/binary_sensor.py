@@ -50,7 +50,7 @@ class Amt8000ZoneSensor(CoordinatorEntity[Amt8000Coordinator], BinarySensorEntit
 
     @property
     def device_class(self) -> BinarySensorDeviceClass | None:
-        dc = self._entry.options.get(f"zone_{self._zone_number}_device_class", "")
+        dc = self._entry.options.get(f"zone_{self._zone_number}_device_class", "door")
         return BinarySensorDeviceClass(dc) if dc else None
 
     @property
