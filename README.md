@@ -41,6 +41,7 @@ Read-only examples:
 python3 amt8000_tool.py --host 192.168.1.100 status
 python3 amt8000_tool.py --host 192.168.1.100 --json status
 python3 amt8000_tool.py --host 192.168.1.100 raw-status
+python3 amt8000_tool.py --host 192.168.1.100 --trace-auth status
 python3 amt8000_tool.py --host 192.168.1.100 mac --execute
 python3 amt8000_tool.py --host 192.168.1.100 keep-alive --execute
 python3 amt8000_tool.py --host 192.168.1.100 arm --partition 1 --mode stay
@@ -61,7 +62,7 @@ python3 amt8000_tool.py --host 192.168.1.100 siren-off --execute
 python3 amt8000_tool.py --host 192.168.1.100 pgm --index 0 --state on --execute
 ```
 
-Todas as operações exibem a requisição e a resposta detalhadas, incluindo payload, ACK/NACK e checksum. Pânico, sirene e PGM podem causar efeitos físicos e exigem revisão cuidadosa antes de usar `--execute`. A senha é solicitada interativamente e não é exibida. Não compartilhe capturas de autenticação ou relatórios contendo detalhes da rede.
+Todas as operações exibem a requisição e a resposta detalhadas, incluindo payload, ACK/NACK e checksum. Use `--trace-auth` para ver a estrutura da autenticação com os seis bytes da senha mascarados. Pânico, sirene e PGM podem causar efeitos físicos e exigem revisão cuidadosa antes de usar `--execute`. A senha é solicitada interativamente e não é exibida. Não compartilhe capturas de autenticação ou relatórios contendo detalhes da rede.
 
 ## Entities created
 

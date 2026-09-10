@@ -1,4 +1,6 @@
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 
 import amt8000_tool
 
@@ -68,6 +70,18 @@ class ToolTests(unittest.TestCase):
         self.assertIn("armar stay", amt8000_tool.describe_request(amt8000_tool.ARM_COMMAND, bytes([1, 2])))
         self.assertIn("tipo=médico", amt8000_tool.describe_request(amt8000_tool.PANIC_COMMAND, bytes([3])))
         self.assertIn("estado=ligado", amt8000_tool.describe_request(amt8000_tool.PGM_COMMAND, bytes([2, 1])))
+
+    def test_auth_trace_masks_password_bytes(self) -> None:
+        client = amt8000_tool.Amt8000Client("127.0.0.1", 9009, "1234")
+        payload = [0x00] + client._encode_password("1234") + [0x10]
+        frame = client._packet([0xF0, 0xF0], payload)
+        output = StringIO()
+
+        with redirect_stdout(output):
+            amt8000_tool.print_auth_trace(frame, payload)
+
+        self.assertIn("password: ** ** ** ** ** **", output.getvalue())
+        self.assertNotIn("0A 0A 01 02 03 04", output.getvalue())
 
 
 if __name__ == "__main__":

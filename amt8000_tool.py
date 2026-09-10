@@ -29,6 +29,8 @@ _client = load_client_module()
 ALL_PARTITIONS = _client.ALL_PARTITIONS
 Amt8000Client = _client.Amt8000Client
 PanelStatus = _client.PanelStatus
+CannotConnect = _client.CannotConnect
+InvalidAuth = _client.InvalidAuth
 
 STATUS_COMMAND = bytes([0x0B, 0x4A])
 ARM_COMMAND = bytes([0x40, 0x1E])
@@ -42,6 +44,38 @@ PGM_COMMAND = bytes([0x45, 0xAF])
 
 class DiagnosticClient(Amt8000Client):
     """Expose the raw status frame without duplicating protocol encoding."""
+
+    def __init__(self, host: str, port: int, password: str, trace_auth: bool = False) -> None:
+        super().__init__(host, port, password)
+        self.trace_auth = trace_auth
+
+    async def _connect_and_auth(self):
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(self._host, self._port), self._timeout
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            raise CannotConnect(f"Cannot connect to {self._host}:{self._port}") from exc
+
+        auth_payload = [0x00] + self._encode_password(self._password) + [0x10]
+        auth_frame = self._packet([0xF0, 0xF0], auth_payload)
+        if self.trace_auth:
+            print_auth_trace(auth_frame, auth_payload)
+        writer.write(auth_frame)
+        await writer.drain()
+
+        response = await self._read_frame(reader)
+        if self.trace_auth:
+            print_command_response(response)
+        result = response[8] if len(response) > 8 else -1
+        if result == 0x01:
+            writer.close()
+            raise InvalidAuth("Invalid password")
+        if result != 0x00:
+            writer.close()
+            raise CannotConnect(f"Auth rejected: code=0x{result:02X}")
+
+        return reader, writer
 
     async def get_status_frame(self) -> tuple[PanelStatus, bytes, bytes]:
         reader, writer = await self._connect_and_auth()
@@ -74,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", help="IP ou hostname da central")
     parser.add_argument("--port", type=int, default=9009, help="Porta TCP (padrão: 9009)")
     parser.add_argument("--json", action="store_true", help="Exibe a saída em JSON quando aplicável")
+    parser.add_argument(
+        "--trace-auth",
+        action="store_true",
+        help="Exibe a estrutura da autenticação com a senha mascarada",
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -203,9 +242,9 @@ def print_status_frame_details(frame: bytes) -> None:
     print("Payload de status:")
     print(f"  payload[0]       modelo: 0x{payload[0]:02X}")
     print(f"  payload[1:4]     firmware: {payload[1]}.{payload[2]}.{payload[3]}")
-    print(f"  payload[4:12]    reservado/desconhecido: {hex_bytes(payload[4:12])}")
+    print(f"  payload[4:12]    não mapeado: {hex_bytes(payload[4:12])}")
     print_mask_block("zonas habilitadas", payload, 12, 18, 56)
-    print(f"  payload[19]      reservado/desconhecido: {payload[19]:02X}")
+    print(f"  payload[19]      não mapeado: {payload[19]:02X}")
     print(
         f"  payload[20]      estado global: {status_byte:02X} "
         f"(arme={arm_states.get(arm_state, 'desconhecido')}, "
@@ -229,21 +268,21 @@ def print_status_frame_details(frame: bytes) -> None:
             flags.append("armada")
         print(f"    P{index}: {value:02X} ({', '.join(flags) if flags else 'inativa/desarmada'})")
 
-    print(f"  payload[37]      reservado/desconhecido: {payload[37]:02X}")
+    print(f"  payload[37]      não mapeado: {payload[37]:02X}")
     print_mask_block("zonas abertas", payload, 38, 44, 56)
-    print(f"  payload[45]      reservado/desconhecido: {payload[45]:02X}")
+    print(f"  payload[45]      não mapeado: {payload[45]:02X}")
     print_mask_block("zonas violadas", payload, 46, 52, 56)
-    print(f"  payload[53]      reservado/desconhecido: {payload[53]:02X}")
+    print(f"  payload[53]      não mapeado: {payload[53]:02X}")
     print_mask_block("zonas em bypass", payload, 54, 61, 56)
-    print(f"  payload[62:71]   reservado/desconhecido: {hex_bytes(payload[62:71])}")
+    print(f"  payload[62:71]   não mapeado: {hex_bytes(payload[62:71])}")
     print(f"  payload[71]      tamper da central: {payload[71]:02X} ({'detectado' if payload[71] & 0x02 else 'normal'})")
-    print(f"  payload[72:89]   reservado/desconhecido: {hex_bytes(payload[72:89])}")
+    print(f"  payload[72:89]   não mapeado: {hex_bytes(payload[72:89])}")
     print_mask_block("tamper das zonas", payload, 89, 95, 56)
-    print(f"  payload[96:105]  reservado/desconhecido: {hex_bytes(payload[96:105])}")
+    print(f"  payload[96:105]  não mapeado: {hex_bytes(payload[96:105])}")
     print_mask_block("bateria baixa nas zonas", payload, 105, 111, 56)
-    print(f"  payload[112:134] reservado/desconhecido: {hex_bytes(payload[112:134])}")
+    print(f"  payload[112:134] não mapeado: {hex_bytes(payload[112:134])}")
     print(f"  payload[134]     bateria da central: {payload[134]:02X} ({battery_names.get(payload[134], 'desconhecida')})")
-    print(f"  payload[135:143] reservado/desconhecido: {hex_bytes(payload[135:143])}")
+    print(f"  payload[135:143] não mapeado: {hex_bytes(payload[135:143])}")
 
 
 def status_to_dict(status: PanelStatus) -> dict:
@@ -324,6 +363,19 @@ def print_dry_run(packet: bytes) -> None:
     print("Use --execute para enviar o comando, após revisar o alvo.")
 
 
+def print_auth_trace(frame: bytes, payload: list[int]) -> None:
+    masked_payload = [f"{payload[0]:02X}"] + ["**"] * 6 + [f"{payload[7]:02X}"]
+    frame_tokens = [f"{value:02X}" for value in frame]
+    frame_tokens[9:15] = ["**"] * 6
+    print("Autenticação:")
+    print("  comando: 0xF0F0 AUTHORIZE")
+    print(f"  device_type: 0x{payload[0]:02X}")
+    print(f"  password: {' '.join(masked_payload[1:7])}")
+    print(f"  software_version: 0x{payload[7]:02X}")
+    print(f"  checksum: {frame[-1]:02X} (calculado sobre os bytes reais)")
+    print(f"  frame mascarado: {' '.join(frame_tokens)}")
+
+
 def print_command_frame(label: str, frame: bytes) -> None:
     command = frame[6:8] if len(frame) >= 8 else b""
     payload = frame[8:-1] if len(frame) >= 9 else b""
@@ -382,7 +434,7 @@ def decode_mac_response(frame: bytes) -> str | None:
 
 async def connect_client(args: argparse.Namespace) -> DiagnosticClient:
     host = require_host(args)
-    return DiagnosticClient(host, args.port, read_password())
+    return DiagnosticClient(host, args.port, read_password(), trace_auth=args.trace_auth)
 
 
 async def run_read_command(args: argparse.Namespace) -> None:
