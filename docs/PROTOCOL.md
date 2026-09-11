@@ -67,7 +67,7 @@ O catálogo abaixo vem da documentação/implementação do `guardian-api-intelb
 | `ALARM_PANEL_STATUS` | `0x0B4A` | Sem payload na requisição | Sim |
 | `PANIC_ALARM` | `0x401A` | `[panic_type]` | Não; não habilitado |
 | `TURN_OFF_SIREN` | `0x4019` | Sem payload | Não; não habilitado |
-| `BYPASS_ZONE` | `0x401F` | `[zone_index, bypass]` | Implementado; resposta real deve ser registrada |
+| `BYPASS_ZONE` | `0x401F` | `[zone_index, bypass]` | Sim, ativação de bypass por zona |
 | `GET_MAC` | `0x3FAA` | `[0x00]` | Sim |
 | `PGM_ON_OFF` | `0x45AF` | `[pgm_index, state]` | Não; não habilitado |
 
@@ -207,7 +207,7 @@ Payload:
 | `operation` | `0x00` | Desarmar |
 | `operation` | `0x01` | Armar total/away |
 | `operation` | `0x02` | Armar stay/parcial — documentado no projeto irmão, não validado localmente |
-| `operation` | `0x03` | Armar forçado — documentado no projeto irmão, não validado localmente |
+| `operation` | `0x03` | Não utilizado; arme com zonas abertas usa bypass por zona e depois `0x01` |
 
 O cliente atual usa `0x00` e `0x01`.
 
@@ -226,6 +226,8 @@ Para ISECNet V2, o projeto de referência documenta uma operação por zona:
 | `bypass` | `0x00` | Remover bypass; ainda não exposto pela integração |
 
 O cliente envia uma requisição separada para cada zona. A confirmação deve ser `ACK (0xF0FE)`; em caso de `NACK (0xF0FD)`, o primeiro byte do payload é o código de erro.
+
+Para armar com zonas abertas, o fluxo validado é ativar o bypass de cada zona com `0x401F` e, em seguida, enviar `SYSTEM_ARM_DISARM` com `operation=0x01` (arme total/away). O utilitário não expõe um modo de arme forçado separado.
 
 ## GET MAC — `0x3FAA`
 

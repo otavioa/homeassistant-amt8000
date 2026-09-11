@@ -45,8 +45,14 @@ python3 amt8000_tool.py --host 192.168.1.100 --trace-auth status
 python3 amt8000_tool.py --host 192.168.1.100 mac --execute
 python3 amt8000_tool.py --host 192.168.1.100 keep-alive --execute
 python3 amt8000_tool.py --host 192.168.1.100 arm --partition 1 --mode stay
-python3 amt8000_tool.py --host 192.168.1.100 arm --partition 1 --mode force
 python3 amt8000_tool.py --host 192.168.1.100 watch --interval 5
+```
+
+Para armar com zonas abertas, ative o bypass das zonas e depois repita o arme normal:
+
+```bash
+python3 amt8000_tool.py --host 192.168.1.100 bypass --zone 3 --execute
+python3 amt8000_tool.py --host 192.168.1.100 arm --partition 1 --mode away --execute
 ```
 
 `raw-status` detalha o frame completo, separando cabeçalho, comando, checksum e os blocos do payload: modelo, firmware, máscaras de zonas, estado global, partições, tamper e bateria.

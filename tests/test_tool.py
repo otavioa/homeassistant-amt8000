@@ -71,6 +71,12 @@ class ToolTests(unittest.TestCase):
         self.assertIn("tipo=médico", amt8000_tool.describe_request(amt8000_tool.PANIC_COMMAND, bytes([3])))
         self.assertIn("estado=ligado", amt8000_tool.describe_request(amt8000_tool.PGM_COMMAND, bytes([2, 1])))
 
+    def test_arm_parser_does_not_expose_force_mode(self) -> None:
+        parser = amt8000_tool.build_parser()
+
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["arm", "--partition", "1", "--mode", "force"])
+
     def test_auth_trace_masks_password_bytes(self) -> None:
         client = amt8000_tool.Amt8000Client("127.0.0.1", 9009, "1234")
         payload = [0x00] + client._encode_password("1234") + [0x10]

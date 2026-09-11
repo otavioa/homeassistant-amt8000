@@ -161,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
         if command == "arm":
             control.add_argument(
                 "--mode",
-                choices=("away", "stay", "force"),
+                choices=("away", "stay"),
                 default="away",
                 help="Modo de arme (padrão: away)",
             )
@@ -389,7 +389,7 @@ def print_command_frame(label: str, frame: bytes) -> None:
 def describe_request(command: bytes, payload: bytes) -> str:
     command_hex = f"0x{command.hex().upper()}"
     if command == ARM_COMMAND and len(payload) >= 2:
-        operations = {0: "desarmar", 1: "armar away", 2: "armar stay", 3: "armar forçado"}
+        operations = {0: "desarmar", 1: "armar away", 2: "armar stay"}
         partition = "todas (0xFF)" if payload[0] == 0xFF else str(payload[0])
         return f"{command_hex} SYSTEM_ARM_DISARM: partição={partition}, operação={operations.get(payload[1], 'desconhecida')}"
     if command == BYPASS_COMMAND and len(payload) >= 2:
@@ -497,7 +497,7 @@ async def run_control(args: argparse.Namespace) -> None:
     if args.command == "disarm":
         subcommand = 0x00
     else:
-        subcommand = {"away": 0x01, "stay": 0x02, "force": 0x03}[args.mode]
+        subcommand = {"away": 0x01, "stay": 0x02}[args.mode]
     payload = [partition, subcommand]
     packet = Amt8000Client("127.0.0.1", 9009, "")._packet(list(ARM_COMMAND), payload)
 
