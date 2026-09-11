@@ -227,7 +227,7 @@ Para ISECNet V2, o projeto de referência documenta uma operação por zona:
 
 O cliente envia uma requisição separada para cada zona. A confirmação deve ser `ACK (0xF0FE)`; em caso de `NACK (0xF0FD)`, o primeiro byte do payload é o código de erro.
 
-Para armar com zonas abertas, o fluxo validado é ativar o bypass de cada zona com `0x401F` e, em seguida, enviar `SYSTEM_ARM_DISARM` com `operation=0x01` (arme total/away). O utilitário não expõe um modo de arme forçado separado.
+Para armar com zonas abertas, o fluxo validado é ativar o bypass de cada zona com `0x401F` e, em seguida, enviar `SYSTEM_ARM_DISARM` com `operation=0x01` (arme total/away). No Home Assistant, as duas operações são executadas pela mesma ação de arme quando `Allow Open Zone Bypass` está ligado; com o switch desligado, o arme é bloqueado e nenhuma zona é anulada. O utilitário não expõe um modo de arme forçado separado.
 
 ## GET MAC — `0x3FAA`
 

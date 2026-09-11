@@ -59,9 +59,11 @@ async def _dismiss_open_zone_notification(
 
 
 async def _arm_with_open_zone_policy(
-    entity: CoordinatorEntity[Amt8000Coordinator], partition_idx: int
+    entity: CoordinatorEntity[Amt8000Coordinator],
+    partition_idx: int,
+    zones: list | None = None,
 ) -> None:
-    zones = _open_zones(entity.coordinator)
+    zones = _open_zones(entity.coordinator) if zones is None else zones
     if not zones:
         await _notify_open_zones(
             entity,
@@ -174,10 +176,16 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
         return AlarmControlPanelState.DISARMED
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
+        zones = _open_zones(self.coordinator)
+        if zones:
+            await _arm_with_open_zone_policy(self, self._partition_idx, zones)
+            return
+
         try:
             await self.coordinator.client.arm_partition(self._partition_idx)
         except OpenZones:
             _LOGGER.warning("Partition %d: arm blocked — open zones", self._partition_idx)
+            await self.coordinator.async_request_refresh()
             await _arm_with_open_zone_policy(self, self._partition_idx)
             return
         await self.coordinator.async_request_refresh()
@@ -223,10 +231,16 @@ class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPane
         return AlarmControlPanelState.DISARMED
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
+        zones = _open_zones(self.coordinator)
+        if zones:
+            await _arm_with_open_zone_policy(self, ALL_PARTITIONS, zones)
+            return
+
         try:
             await self.coordinator.client.arm_partition(ALL_PARTITIONS)
         except OpenZones:
             _LOGGER.warning("Master arm blocked — open zones")
+            await self.coordinator.async_request_refresh()
             await _arm_with_open_zone_policy(self, ALL_PARTITIONS)
             return
         await self.coordinator.async_request_refresh()

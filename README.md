@@ -10,7 +10,7 @@ Native Home Assistant integration v2.0 for the **Intelbras AMT 8000** alarm pane
 - **Arm / Disarm per partition** — individual control of each configured partition
 - **Zone monitoring** — binary sensor per zone (open / closed / violated)
 - **Configurable zone types** — choose the Home Assistant device class for each zone; Door / Open-Closed is the default
-- **Open-zone protection** — arming is blocked when zones are open, with an optional automatic bypass switch
+- **Open-zone protection** — arming can bypass open zones and arm in the same Home Assistant action when the switch is enabled
 - **Live siren detection** — binary sensor + event entity for automations
 - **Device triggers** — "Alarm triggered" trigger in the automation UI (no YAML needed)
 - **Local only** — direct TCP connection to the panel on port 9009
