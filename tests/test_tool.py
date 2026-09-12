@@ -77,6 +77,16 @@ class ToolTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             parser.parse_args(["arm", "--partition", "1", "--mode", "force"])
 
+    def test_bypass_clear_dry_run_uses_disable_flag(self) -> None:
+        parser = amt8000_tool.build_parser()
+        args = parser.parse_args(["bypass", "--zone", "3", "--clear"])
+        self.assertTrue(args.clear)
+        self.assertFalse(args.execute)
+
+        packet = self.client._packet(list(amt8000_tool.BYPASS_COMMAND), [2, 0x00])
+        self.assertEqual(packet[6:10], bytes([0x40, 0x1F, 2, 0x00]))
+        self.assertIn("remover", amt8000_tool.describe_request(amt8000_tool.BYPASS_COMMAND, bytes([2, 0x00])))
+
     def test_auth_trace_masks_password_bytes(self) -> None:
         client = amt8000_tool.Amt8000Client("127.0.0.1", 9009, "1234")
         payload = [0x00] + client._encode_password("1234") + [0x10]

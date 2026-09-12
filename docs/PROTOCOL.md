@@ -67,7 +67,7 @@ O catálogo abaixo vem da documentação/implementação do `guardian-api-intelb
 | `ALARM_PANEL_STATUS` | `0x0B4A` | Sem payload na requisição | Sim |
 | `PANIC_ALARM` | `0x401A` | `[panic_type]` | Não; não habilitado |
 | `TURN_OFF_SIREN` | `0x4019` | Sem payload | Não; não habilitado |
-| `BYPASS_ZONE` | `0x401F` | `[zone_index, bypass]` | Sim, ativação de bypass por zona |
+| `BYPASS_ZONE` | `0x401F` | `[zone_index, bypass]` | Sim: anular (`0x01`) e reativar (`0x00`) por zona. `0x01` também com a central armada (Guardian e `amt8000_tool.py`); `0x00` via `amt8000_tool.py --clear` |
 | `GET_MAC` | `0x3FAA` | `[0x00]` | Sim |
 | `PGM_ON_OFF` | `0x45AF` | `[pgm_index, state]` | Não; não habilitado |
 
@@ -93,11 +93,15 @@ Para o status, a central responde com o próprio comando `0x0B4A` e o payload de
 
 ### Erros de bypass
 
-| Código | Significado |
-|--------|-------------|
-| `0xE6` | Bypass negado |
-| `0xE8` | Bypass com central armada |
-| `0x37` (`55`) | Sem permissão |
+Códigos de NACK (`0xF0FD`) documentados na referência ISECNet. O primeiro byte do payload é o código.
+
+| Código | Significado (referência) | Observado na AMT 8000 |
+|--------|--------------------------|------------------------|
+| `0xE6` | Bypass negado | Possível |
+| `0xE8` | Documentado como “bypass com central armada” | **Não observado.** `0x401F` com a central armada retornou ACK no Guardian e no `amt8000_tool.py`. |
+| `0x37` (`55`) | Sem permissão | Possível |
+
+Não tratar `0xE8` como bloqueio de produto: anular zona com a central armada é válido no transporte local desta AMT.
 
 ## Fluxo local implementado
 
@@ -222,10 +226,12 @@ Para ISECNet V2, o projeto de referência documenta uma operação por zona:
 | Byte | Valor | Significado |
 |------|-------|-------------|
 | `zone_index` | `0x00`–`0x37` | Zonas 1–56, convertidas para índice zero-based |
-| `bypass` | `0x01` | Ativar bypass |
-| `bypass` | `0x00` | Remover bypass; ainda não exposto pela integração |
+| `bypass` | `0x01` | Ativar bypass (anular). Validado localmente, inclusive com a central armada. |
+| `bypass` | `0x00` | Remover bypass (reativar). Validado localmente com `amt8000_tool.py --clear` (ACK). Cliente HA e switch por zona usam o mesmo payload. |
 
 O cliente envia uma requisição separada para cada zona. A confirmação deve ser `ACK (0xF0FE)`; em caso de `NACK (0xF0FD)`, o primeiro byte do payload é o código de erro.
+
+No Home Assistant, cada zona habilitada tem um `switch` (`Zone N Bypass`): ligado anula (`0x01`), desligado reativa (`0x00`). O estado segue a máscara de zonas em bypass do status.
 
 Para armar com zonas abertas, o fluxo validado é ativar o bypass de cada zona com `0x401F` e, em seguida, enviar `SYSTEM_ARM_DISARM` com `operation=0x01` (arme total/away). No Home Assistant, as duas operações são executadas pela mesma ação de arme quando `Allow Open Zone Bypass` está ligado; com o switch desligado, o arme é bloqueado e nenhuma zona é anulada. O utilitário não expõe um modo de arme forçado separado.
 

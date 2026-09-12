@@ -174,6 +174,11 @@ def build_parser() -> argparse.ArgumentParser:
     bypass = subparsers.add_parser("bypass", help="Faz bypass de uma ou mais zonas")
     bypass.add_argument("--zone", type=int, action="append", required=True, help="Zona de 1 a 56; repita a opção")
     bypass.add_argument(
+        "--clear",
+        action="store_true",
+        help="Remove o bypass (reativa a zona) em vez de anular",
+    )
+    bypass.add_argument(
         "--execute",
         action="store_true",
         help="Confirma que o comando deve ser enviado à central",
@@ -520,22 +525,24 @@ async def run_bypass(args: argparse.Namespace) -> None:
     if any(not 1 <= zone <= 56 for zone in args.zone):
         raise SystemExit("As zonas devem estar entre 1 e 56.")
 
+    flag = 0x00 if args.clear else 0x01
     zero_based_zones = [zone - 1 for zone in args.zone]
     packets = [
-        Amt8000Client("127.0.0.1", 9009, "")._packet(list(BYPASS_COMMAND), [zone, 0x01])
+        Amt8000Client("127.0.0.1", 9009, "")._packet(list(BYPASS_COMMAND), [zone, flag])
         for zone in zero_based_zones
     ]
     if not args.execute:
         for zone, packet in zip(args.zone, packets):
             print(f"Zona {zone}:")
-            print(f"Comando: {describe_request(BYPASS_COMMAND, bytes([zone - 1, 0x01]))}")
+            print(f"Comando: {describe_request(BYPASS_COMMAND, bytes([zone - 1, flag]))}")
             print_dry_run(packet)
         return
 
-    confirm_action(f"ATIVAR BYPASS nas zonas {', '.join(map(str, args.zone))}")
+    action = "REMOVER BYPASS" if args.clear else "ATIVAR BYPASS"
+    confirm_action(f"{action} nas zonas {', '.join(map(str, args.zone))}")
     client = await connect_client(args)
     for zone, zone_index, packet in zip(args.zone, zero_based_zones, packets):
-        payload = bytes([zone_index, 0x01])
+        payload = bytes([zone_index, flag])
         print(f"Zona {zone}: {describe_request(BYPASS_COMMAND, payload)}")
         print_command_frame("Requisição", packet)
         response = await client.send_command_frame(BYPASS_COMMAND, payload)

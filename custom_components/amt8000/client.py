@@ -184,15 +184,16 @@ class Amt8000Client:
     async def disarm_partition(self, partition_idx: int) -> None:
         await self._arm_cmd(partition_idx, _SUBCMD_DISARM)
 
-    async def bypass_zones(self, zone_indices: list[int]) -> None:
-        """Bypass zones before a confirmed automatic arm retry."""
+    async def bypass_zones(self, zone_indices: list[int], enabled: bool = True) -> None:
+        """Set zone bypass: enabled=True anula, False reativa."""
         if not zone_indices or any(not 0 <= index < 56 for index in zone_indices):
             raise BypassError("Invalid zone index")
 
+        flag = 0x01 if enabled else 0x00
         reader, writer = await self._connect_and_auth()
         try:
             for zone_index in zone_indices:
-                writer.write(self._packet(_CMD_BYPASS, [zone_index, 0x01]))
+                writer.write(self._packet(_CMD_BYPASS, [zone_index, flag]))
                 await writer.drain()
                 response = await self._read_frame(reader)
                 if len(response) < 8:
@@ -203,7 +204,7 @@ class Amt8000Client:
                     error_code = response[8] if len(response) > 8 else 0
                     messages = {
                         0xE6: "Bypass denied",
-                        0xE8: "Bypass denied while panel is armed",
+                        0xE8: "Bypass rejected",
                         55: "Bypass permission denied",
                     }
                     raise BypassError(messages.get(error_code, f"Bypass failed: {error_code}"))
