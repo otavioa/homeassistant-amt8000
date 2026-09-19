@@ -10,11 +10,11 @@ O AMT 8000 usa o mesmo protocolo `0xe7` nativo (TCP 9009) já confirmado nos mod
 - Armar / desarmar o sistema inteiro
 - Armar / desarmar partições (grupos) individualmente
 - Status em tempo real de cada zona (aberta / fechada / em alarme)
+- Controle de PGMs (saídas programáveis) via comando `0x45AF`
 - Notificações de alarme via HA (evento HA + automação iOS)
 - Comunicação 100% local (LAN), sem dependência de cloud Intelbras em runtime
 
 ### Fora
-- Controle de PGMs (pode ser adicionado em iteração futura)
 - Histórico de eventos / log do painel
 - Acesso via cloud / GPRS / módulo celular
 - Abertura física do equipamento (sem UART/JTAG)

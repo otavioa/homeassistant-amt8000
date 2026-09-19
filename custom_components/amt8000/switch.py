@@ -1,4 +1,4 @@
-"""Switches for AMT 8000: arm policy and per-zone bypass."""
+"""Switches for AMT 8000: arm policy, per-zone bypass, and PGMs."""
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
@@ -12,7 +12,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .alarm_control_panel import _device_info
-from .client import BypassError
+from .client import BypassError, PgmError
 from .const import DOMAIN
 from .coordinator import Amt8000Coordinator
 
@@ -27,6 +27,10 @@ async def async_setup_entry(
             Amt8000ZoneBypassSwitch(coordinator, zone.number, entry)
             for zone in coordinator.data.zones
         )
+        entities.extend(
+            Amt8000PgmSwitch(coordinator, pgm.index, entry)
+            for pgm in coordinator.data.pgms
+        )
     async_add_entities(entities)
 
 
@@ -36,6 +40,15 @@ def _zone_from_coordinator(coordinator: Amt8000Coordinator, zone_number: int):
     for zone in coordinator.data.zones:
         if zone.number == zone_number:
             return zone
+    return None
+
+
+def _pgm_from_coordinator(coordinator: Amt8000Coordinator, pgm_index: int):
+    if not coordinator.data:
+        return None
+    for pgm in coordinator.data.pgms:
+        if pgm.index == pgm_index:
+            return pgm
     return None
 
 
@@ -116,4 +129,55 @@ class Amt8000ZoneBypassSwitch(CoordinatorEntity[Amt8000Coordinator], SwitchEntit
             )
         except BypassError as exc:
             raise HomeAssistantError("A central recusou o comando de bypass da zona.") from exc
+        await self.coordinator.async_request_refresh()
+
+
+class Amt8000PgmSwitch(CoordinatorEntity[Amt8000Coordinator], SwitchEntity):
+    """Liga ou desliga uma saída PGM."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self, coordinator: Amt8000Coordinator, pgm_index: int, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._pgm_index = pgm_index
+        self._number = pgm_index + 1
+        self._attr_unique_id = f"{entry.entry_id}_pgm_{self._number}"
+        self._attr_name = f"PGM {self._number}"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def icon(self) -> str:
+        return "mdi:electric-switch" if self.is_on else "mdi:electric-switch-closed"
+
+    @property
+    def is_on(self) -> bool | None:
+        pgm = _pgm_from_coordinator(self.coordinator, self._pgm_index)
+        return pgm.on if pgm else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        pgm = _pgm_from_coordinator(self.coordinator, self._pgm_index)
+        if pgm is None:
+            return {}
+        return {
+            "index": pgm.index,
+            "number": self._number,
+            "tamper": pgm.tamper,
+            "low_battery": pgm.low_battery,
+            "comm_fail": pgm.comm_fail,
+        }
+
+    async def async_turn_on(self, **kwargs: object) -> None:
+        await self._set_pgm(True)
+
+    async def async_turn_off(self, **kwargs: object) -> None:
+        await self._set_pgm(False)
+
+    async def _set_pgm(self, enabled: bool) -> None:
+        try:
+            await self.coordinator.client.set_pgm(self._pgm_index, enabled)
+        except PgmError as exc:
+            raise HomeAssistantError("A central recusou o comando da PGM.") from exc
         await self.coordinator.async_request_refresh()

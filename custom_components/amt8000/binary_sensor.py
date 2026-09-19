@@ -68,6 +68,7 @@ class Amt8000ZoneSensor(CoordinatorEntity[Amt8000Coordinator], BinarySensorEntit
             "bypassed": z.bypassed,
             "tamper": z.tamper,
             "low_battery": z.low_battery,
+            "zone_status": "Anulado" if z.bypassed else "Ativo",
         }
 
 

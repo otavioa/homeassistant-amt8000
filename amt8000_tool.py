@@ -29,6 +29,7 @@ _client = load_client_module()
 ALL_PARTITIONS = _client.ALL_PARTITIONS
 Amt8000Client = _client.Amt8000Client
 PanelStatus = _client.PanelStatus
+MAX_PGMS = _client.MAX_PGMS
 CannotConnect = _client.CannotConnect
 InvalidAuth = _client.InvalidAuth
 
@@ -37,6 +38,7 @@ ARM_COMMAND = bytes([0x40, 0x1E])
 BYPASS_COMMAND = bytes([0x40, 0x1F])
 KEEP_ALIVE_COMMAND = bytes([0xF0, 0xF7])
 GET_MAC_COMMAND = bytes([0x3F, 0xAA])
+DEVICES_COMMAND = bytes([0x0B, 0x50])
 PANIC_COMMAND = bytes([0x40, 0x1A])
 SIREN_OFF_COMMAND = bytes([0x40, 0x19])
 PGM_COMMAND = bytes([0x45, 0xAF])
@@ -84,12 +86,17 @@ class DiagnosticClient(Amt8000Client):
             writer.write(request)
             await writer.drain()
             frame = await self._read_frame(reader)
+            writer.write(self._packet(list(DEVICES_COMMAND)))
+            await writer.drain()
+            devices_frame = await self._read_frame(reader)
         finally:
             await self._disconnect(writer)
 
-        payload_length = int.from_bytes(frame[4:6], "big") - 2
-        payload = frame[8 : 8 + payload_length]
-        return self._parse_status(payload), frame, request
+        payload = Amt8000Client._response_payload(frame)
+        pgm_indexes = Amt8000Client.recorded_pgm_indexes(
+            Amt8000Client._response_payload(devices_frame, expected=list(DEVICES_COMMAND))
+        )
+        return self._parse_status(payload, pgm_indexes), frame, request
 
     async def send_command_frame(self, command: bytes, payload: bytes = b"") -> bytes:
         reader, writer = await self._connect_and_auth()
@@ -118,6 +125,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("status", help="Consulta e decodifica o status")
     subparsers.add_parser("raw-status", help="Exibe o frame de status em hexadecimal")
+    subparsers.add_parser(
+        "devices",
+        help="Consulta dispositivos RF cadastrados (comando 0x0B50)",
+    )
 
     for command, description in (
         ("mac", "Consulta o endereço MAC da central"),
@@ -143,7 +154,12 @@ def build_parser() -> argparse.ArgumentParser:
     siren.add_argument("--execute", action="store_true", help="Confirma o envio à central")
 
     pgm = subparsers.add_parser("pgm", help="Liga ou desliga uma saída PGM")
-    pgm.add_argument("--index", type=int, required=True, help="Índice PGM de 0 a 7")
+    pgm.add_argument(
+        "--index",
+        type=int,
+        required=True,
+        help=f"Índice PGM de 0 a {MAX_PGMS - 1}",
+    )
     pgm.add_argument("--state", choices=("on", "off"), required=True)
     pgm.add_argument("--execute", action="store_true", help="Confirma o envio à central")
 
@@ -287,7 +303,9 @@ def print_status_frame_details(frame: bytes) -> None:
     print_mask_block("bateria baixa nas zonas", payload, 105, 111, 56)
     print(f"  payload[112:134] não mapeado: {hex_bytes(payload[112:134])}")
     print(f"  payload[134]     bateria da central: {payload[134]:02X} ({battery_names.get(payload[134], 'desconhecida')})")
-    print(f"  payload[135:143] não mapeado: {hex_bytes(payload[135:143])}")
+    print(f"  payload[135:137] não mapeado: {hex_bytes(payload[135:137])}")
+    print_mask_block("PGMs ligadas", payload, 137, 138, MAX_PGMS)
+    print(f"  payload[139:143] não mapeado: {hex_bytes(payload[139:143])}")
 
 
 def status_to_dict(status: PanelStatus) -> dict:
@@ -302,6 +320,18 @@ def status_to_dict(status: PanelStatus) -> dict:
         "tamper": status.tamper,
         "partitions": [asdict(partition) for partition in status.partitions],
         "zones": [asdict(zone) for zone in status.zones],
+        "pgms": [
+            {
+                "number": pgm.index + 1,
+                "index": pgm.index,
+                "enabled": pgm.enabled,
+                "on": pgm.on,
+                "tamper": pgm.tamper,
+                "low_battery": pgm.low_battery,
+                "comm_fail": pgm.comm_fail,
+            }
+            for pgm in status.pgms
+        ],
     }
 
 
@@ -342,6 +372,21 @@ def print_status(status: PanelStatus) -> None:
         if zone.low_battery:
             flags.append("bateria baixa")
         print(f"  Z{zone.number}: {', '.join(flags) if flags else 'normal'}")
+
+    print("PGMs:")
+    if not status.pgms:
+        print("  (nenhuma)")
+    for pgm in status.pgms:
+        state = "ligada" if pgm.on else "desligada"
+        flags = []
+        if pgm.tamper:
+            flags.append("tamper")
+        if pgm.low_battery:
+            flags.append("bateria baixa")
+        if pgm.comm_fail:
+            flags.append("falha rádio")
+        suffix = f" ({', '.join(flags)})" if flags else ""
+        print(f"  PGM {pgm.index + 1}: {state}{suffix}")
 
 
 def parse_partition(value: str) -> int:
@@ -408,6 +453,7 @@ def describe_request(command: bytes, payload: bytes) -> str:
         STATUS_COMMAND: "ALARM_PANEL_STATUS",
         KEEP_ALIVE_COMMAND: "KEEP_ALIVE",
         GET_MAC_COMMAND: "GET_MAC",
+        DEVICES_COMMAND: "DISPOSITIVOS_CADASTRADOS",
         SIREN_OFF_COMMAND: "TURN_OFF_SIREN",
     }
     return f"{command_hex} {names.get(command, 'comando desconhecido')}"
@@ -428,6 +474,46 @@ def print_command_response(frame: bytes) -> None:
     print(f"  frame: {hex_bytes(frame)}")
 
 
+def decode_recorded_devices(payload: bytes) -> dict[str, list[int]]:
+    """Decode 0x0B50 DISPOSITIVOS_CADASTRADOS (SDK: 29-byte Data field)."""
+    keyfobs = enabled_indexes(payload[0:13], 98, start=0) if payload else []
+    sensors = enabled_indexes(payload[13:21], 64, start=1) if len(payload) >= 14 else []
+    keypads = enabled_indexes(payload[21:23], 16, start=1) if len(payload) >= 22 else []
+    sirens = enabled_indexes(payload[23:25], 16, start=1) if len(payload) >= 24 else []
+    repeaters: list[int] = []
+    if len(payload) >= 26:
+        for bit in range(4):
+            if payload[25] & (1 << bit):
+                repeaters.append(bit + 1)
+    pgms = [index + 1 for index in Amt8000Client.recorded_pgm_indexes(payload)]
+    return {
+        "keyfobs": keyfobs,
+        "sensors": sensors,
+        "keypads": keypads,
+        "sirens": sirens,
+        "repeaters": repeaters,
+        "pgms": pgms,
+    }
+
+
+def print_recorded_devices(payload: bytes) -> None:
+    decoded = decode_recorded_devices(payload)
+
+    def fmt(values: list[int]) -> str:
+        return ", ".join(map(str, values)) if values else "nenhum"
+
+    print("Dispositivos cadastrados (0x0B50):")
+    print(f"  payload ({len(payload)} bytes): {hex_bytes(payload) if payload else '(vazio)'}")
+    if len(payload) < 28:
+        print("  aviso: payload menor que os 29 bytes do SDK; decodificação parcial")
+    print(f"  keyfobs: {fmt(decoded['keyfobs'])}")
+    print(f"  sensores (zonas): {fmt(decoded['sensors'])}")
+    print(f"  teclados: {fmt(decoded['keypads'])}")
+    print(f"  sirenes: {fmt(decoded['sirens'])}")
+    print(f"  repetidores: {fmt(decoded['repeaters'])}")
+    print(f"  PGMs: {fmt(decoded['pgms'])}")
+
+
 def decode_mac_response(frame: bytes) -> str | None:
     if len(frame) < 16:
         return None
@@ -440,6 +526,24 @@ def decode_mac_response(frame: bytes) -> str | None:
 async def connect_client(args: argparse.Namespace) -> DiagnosticClient:
     host = require_host(args)
     return DiagnosticClient(host, args.port, read_password(), trace_auth=args.trace_auth)
+
+
+async def run_devices(args: argparse.Namespace) -> None:
+    client = await connect_client(args)
+    request = client._packet(list(DEVICES_COMMAND))
+    response = await client.send_command_frame(DEVICES_COMMAND)
+    payload = response[8:-1] if len(response) >= 9 else b""
+    if args.json:
+        data = decode_recorded_devices(payload)
+        data["payload"] = hex_bytes(payload)
+        data["command"] = f"0x{response[6:8].hex().upper()}" if len(response) >= 8 else ""
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+    print(f"Comando da consulta: {describe_request(DEVICES_COMMAND, b'')}")
+    print_command_frame("Requisição", request)
+    print_command_response(response)
+    if len(response) >= 8 and int.from_bytes(response[6:8], "big") not in {0xF0FD, 0xF0FE}:
+        print_recorded_devices(payload)
 
 
 async def run_read_command(args: argparse.Namespace) -> None:
@@ -560,8 +664,8 @@ async def run_extended_control(args: argparse.Namespace) -> None:
         payload = b""
         description = "desligar a sirene"
     else:
-        if not 0 <= args.index <= 7:
-            raise SystemExit("O índice PGM deve estar entre 0 e 7.")
+        if not 0 <= args.index < MAX_PGMS:
+            raise SystemExit(f"O índice PGM deve estar entre 0 e {MAX_PGMS - 1}.")
         command = PGM_COMMAND
         payload = bytes([args.index, 0x01 if args.state == "on" else 0x00])
         description = f"PGM {args.index} {args.state}"
@@ -582,6 +686,8 @@ async def run_extended_control(args: argparse.Namespace) -> None:
 async def async_main(args: argparse.Namespace) -> None:
     if args.command in {"status", "raw-status"}:
         await run_read_command(args)
+    elif args.command == "devices":
+        await run_devices(args)
     elif args.command in {"mac", "keep-alive"}:
         await run_probe(args)
     elif args.command in {"panic", "siren-off", "pgm"}:

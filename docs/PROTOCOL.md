@@ -2,7 +2,9 @@
 
 Este documento reúne o conhecimento disponível sobre o **ISECNet V2** usado pela AMT 8000, com foco na comunicação TCP direta local da integração.
 
-O protocolo é proprietário. As informações combinam observação de tráfego da AMT 8000, implementação desta integração e a documentação/engenharia reversa do projeto [`guardian-api-intelbras`](https://github.com/bobaoapae/guardian-api-intelbras). Os itens marcados como não validados ainda precisam ser confirmados na central local.
+O protocolo é proprietário. As informações combinam observação de tráfego da AMT 8000, esta integração, o SDK Intelbras V2 (`docs/SDKCentraisDeAlarmeIntelbras-v1.0.1/SDKCentraisDeAlarmeIntelbras-v1.0.1.xlsx` e o mapa de comandos `STATUS_COMPLETO` / `0x0B4A`) e a engenharia reversa do projeto [`guardian-api-intelbras`](https://github.com/bobaoapae/guardian-api-intelbras). Os itens marcados como não validados ainda precisam ser confirmados na central local.
+
+No SDK, o campo Data é **1-based**. Neste documento e no código, `payload[n]` = Byte SDK `n+1`.
 
 ## Escopo e variantes
 
@@ -65,11 +67,12 @@ O catálogo abaixo vem da documentação/implementação do `guardian-api-intelb
 | `DISCONNECT` | `0xF0F1` | Sem payload | Sim, usado ao fechar sessão |
 | `SYSTEM_ARM_DISARM` | `0x401E` | `[partition, operation]` | Sim, arme/desarme |
 | `ALARM_PANEL_STATUS` | `0x0B4A` | Sem payload na requisição | Sim |
+| `DISPOSITIVOS_CADASTRADOS` | `0x0B50` | Sem payload na requisição; resposta: 29 bytes | Sim: tool `devices` e `get_status` do cliente (PGMs cadastradas) |
 | `PANIC_ALARM` | `0x401A` | `[panic_type]` | Não; não habilitado |
 | `TURN_OFF_SIREN` | `0x4019` | Sem payload | Não; não habilitado |
 | `BYPASS_ZONE` | `0x401F` | `[zone_index, bypass]` | Sim: anular (`0x01`) e reativar (`0x00`) por zona. `0x01` também com a central armada (Guardian e `amt8000_tool.py`); `0x00` via `amt8000_tool.py --clear` |
 | `GET_MAC` | `0x3FAA` | `[0x00]` | Sim |
-| `PGM_ON_OFF` | `0x45AF` | `[pgm_index, state]` | Não; não habilitado |
+| `PGM_ON_OFF` | `0x45AF` | `[pgm_index, state]` | Sim: índice `0` ligar/desligar com ACK local. Índices `1`–`15` aceitos pelo cliente; `8`–`15` ainda sem captura |
 
 O projeto de referência também lista `CONNECT (0x30F6)` e `APP_CONNECT (0xFFF1)` para fluxos Cloud/Relay. Eles não fazem parte do fluxo local simplificado atualmente utilizado por este projeto.
 
@@ -146,32 +149,47 @@ A requisição não possui payload relevante. Na central observada, a resposta c
 payload = frame[8 : 8 + (size - 2)]
 ```
 
+Tamanho fixo no SDK: mínimo = máximo = **143** bytes (`size` do frame `0x0091`).
+
+Máscaras de zona no SDK têm **64 bits** (8 bytes). O cliente HA ainda lê **56 bits** (7 bytes), no recorte do projeto de referência; o 8º byte de cada máscara é zonas 57–64.
+
 ### Payload de status
 
-| Offset | Campo | Descrição |
-|--------|-------|-----------|
-| `0` | Modelo | Na AMT 8000 observada com firmware `3.2.5`: `0x8B`. |
-| `1–3` | Firmware | `major.minor.patch`. |
-| `4–11` | Desconhecido | Não mapeado. |
-| `12–18` | Zonas habilitadas | Máscara de 56 zonas. LSB é a zona inicial de cada byte. |
-| `19` | Desconhecido | Não mapeado. |
-| `20` | Estado global | Estado de arme, zonas, sirene. |
-| `21–36` | Partições | 16 bytes, um por índice de partição. |
-| `37` | Desconhecido | Não mapeado. |
-| `38–44` | Zonas abertas | Máscara de 56 zonas. |
-| `45` | Desconhecido | Não mapeado. |
-| `46–52` | Zonas violadas | Máscara de 56 zonas. |
-| `53` | Desconhecido | Não mapeado. |
-| `54–61` | Zonas em bypass | Máscara de 56 zonas; o oitavo byte ainda precisa ser confirmado. |
-| `62–70` | Desconhecido | Não mapeado. |
-| `71` | Tamper da central | Bit `1` indica tamper. |
-| `72–88` | Desconhecido | Não mapeado. |
-| `89–95` | Tamper de zonas | Máscara de 56 zonas. |
-| `96–104` | Desconhecido | Não mapeado. |
-| `105–111` | Bateria baixa | Máscara de 56 zonas. |
-| `112–133` | Desconhecido | Não mapeado. |
-| `134` | Bateria da central | `1` morta, `2` baixa, `3` média, `4` cheia. |
-| `135–142` | Desconhecido | Não mapeado. |
+| Offset | Byte SDK | Campo | Notas |
+|--------|----------|-------|-------|
+| `0` | 1 | Modelo | Observado `0x8B` no firmware `3.2.5`. O SDK cita `0x01` para AMT 8000. |
+| `1–3` | 2–4 | Firmware | `major.minor.patch`. Validado. |
+| `4–5` | 5–6 | Recursos | Partições, WiFi, Ethernet, GPRS, PSTN, câmera. SDK; HA não usa. |
+| `6` | 7 | Índice do usuário autenticado | SDK; HA não usa. |
+| `7` | 8 | Permissões | Stay / desarmar / bypass. SDK; HA não usa. |
+| `8–9` | 9–10 | Partições do usuário | 16 bits: quais o usuário autenticado pode usar. SDK; HA não usa. |
+| `10–11` | 11–12 | Stay por partição | SDK; HA não usa. |
+| `12–19` | 13–20 | Zonas do usuário | 64 bits. HA trata `12–18` (56 zonas) como habilitadas. |
+| `20` | 21 | Estado global | Validado; HA usa. |
+| `21–37` | 22–38 | Partições 0–16 | 17 bytes no SDK. HA lê `21–36` (16). |
+| `38–45` | 39–46 | Zonas abertas | 64 bits. HA lê `38–44` (56). |
+| `46–53` | 47–54 | Zonas em alarme / violadas | 64 bits. HA lê `46–52` (56). |
+| `54–61` | 55–62 | Bypass | 64 bits. HA lê 56 bits a partir de `54`. |
+| `62–63` | 63–64 | Sirenes 1 e 2 | SDK. |
+| `64–69` | 65–70 | Relógio BCD | Dia, mês, ano, hora, minuto, segundo. Validado na captura. |
+| `70` | 71 | Pânico | SDK. |
+| `71–72` | 72–73 | Falhas gerais | AC, bateria, RF, Ethernet, etc. HA usa `payload[71] bit 1` como tamper da central. |
+| `73–80` | 74–81 | Falha de comunicação (sensor) | SDK. |
+| `81–82` | 82–83 | Falha teclado | SDK. |
+| `83–84` | 84–85 | Falha sirene | SDK. |
+| `85–86` | 86–87 | Falha repetidor | SDK. |
+| `87–88` | 88–89 | Falha comunicação PGM | 16 bits. HA lê para PGM cadastrada (`comm_fail`). SDK; sem captura de falha real. |
+| `89–96` | 90–97 | Tamper sensor | 64 bits. HA lê `89–95` (56). |
+| `97–102` | 98–103 | Tamper teclado / sirene / repetidor | SDK. |
+| `103–104` | 104–105 | Tamper PGM | 16 bits. HA lê para PGM cadastrada (`tamper`). SDK; sem captura de falha real. |
+| `105–112` | 106–113 | Bateria baixa (sensor) | 64 bits. HA lê `105–111` (56). |
+| `113–118` | 114–119 | Bateria teclado / sirene / repetidor | SDK. |
+| `119–120` | 120–121 | Bateria baixa PGM | 16 bits. HA lê para PGM cadastrada (`low_battery`). SDK; sem captura de falha real. |
+| `121–133` | 122–134 | Bateria keyfob | SDK. |
+| `134` | 135 | Bateria da central | `1` morta, `2` baixa, `3` média, `4` cheia. Validado. |
+| `135–136` | 136–137 | Sync RF | Tipo/índice do dispositivo no botão de sync (`0x06` = PGM). SDK. |
+| `137–138` | 138–139 | PGM ligada/desligada | 16 bits. Bit 0 = OFF, bit 1 = ON. `[137]` = índices 0–7, `[138]` = 8–15. Validado na PGM 0. HA usa. Não diz se a PGM existe. |
+| `139–142` | 140–143 | Fechadura | Estado, porta, falha, bateria. SDK. |
 
 ### Estado global — `payload[20]`
 
@@ -184,7 +202,7 @@ payload = frame[8 : 8 + (size - 2)]
 
 ### Status de cada partição
 
-Cada byte em `payload[21:37]` usa:
+Cada byte em `payload[21:38]` (SDK: partições 0–16) usa:
 
 | Bit | Significado |
 |-----|-------------|
@@ -195,6 +213,40 @@ Cada byte em `payload[21:37]` usa:
 | `0` | Armada |
 
 O índice `0` é um agregado somente leitura: seu bit de arme representa o `AND` das partições reais. As partições configuráveis começam no índice `1`.
+
+## Dispositivos cadastrados — `0x0B50`
+
+`DISPOSITIVOS_CADASTRADOS` lista o que está gravado na central (RF). Não substitui o status: não diz se a zona está aberta nem se a PGM está ligada.
+
+Pedido sem payload. A central responde com o próprio `0x0B50` e **29 bytes** de Data. Bit **0** = não cadastrado, bit **1** = cadastrado. LSB de cada byte é o menor índice.
+
+Layout (índices 0-based = Byte do SDK − 1):
+
+| Bytes | Dispositivo | Numeração |
+|-------|-------------|-----------|
+| `0:13` | Controles / keyfobs | 0–97, LSB primeiro |
+| `13:21` | Sensores (zonas) | 1–64 |
+| `21:23` | Teclados | 1–16 |
+| `23:25` | Sirenes | 1–16 |
+| `25` bits 0–3 | Repetidores | 1–4 |
+| `25` bits 4–7 | PGM 1–4 | bit4 = PGM 1 |
+| `26` | PGM 5–12 | bit0 = PGM 5 |
+| `27` bits 0–3 | PGM 13–16 | bit0 = PGM 13 |
+| `28` | Reservado | — |
+
+PGM no bitmap é 1-based. O cliente converte para índice 0-based do `0x45AF` (PGM 1 → `0`).
+
+Captura local (AMT 8000, firmware 3.2.5):
+
+```text
+requisição: 00 00 8F E0 00 02 0B 50 C9
+resposta:   8F E0 00 00 00 1F 0B 50 02 00 00 00 00 00 00 00 00 00 00 00 00 FF 00 00 00 00 00 00 00 00 00 01 00 10 00 00 00 38
+payload:    02 00 00 00 00 00 00 00 00 00 00 00 00 FF 00 00 00 00 00 00 00 00 00 01 00 10 00 00 00
+```
+
+Decodificado: keyfob 1, zonas 1–8, sirene 1, PGM 1. Sem teclado nem repetidor. `payload[25] = 0x10` (bit4) = só PGM 1 cadastrada.
+
+A tool consulta com `devices`. O cliente HA envia `0x0B50` na mesma sessão TCP do `0x0B4A` (`get_status`). Com NACK ou payload curto, a lista de PGM fica vazia — não inventa PGM 1 e 2. Switch no HA só para PGM com bit cadastrado.
 
 ## Arme e desarme — `0x401E`
 
@@ -282,10 +334,25 @@ Payload documentado:
 
 | Campo | Valores |
 |-------|---------|
-| `pgm_index` | `0x00`–`0x07` |
+| `pgm_index` | `0x00`–`0x0F` (PGMs 1–16) |
 | `state` | `0x00` desligado, `0x01` ligado |
 
-Não está habilitado neste projeto.
+O cliente e o `amt8000_tool.py` enviam esse frame. Índice `0` foi validado localmente com ACK ao ligar e ao desligar. Índices `1`–`15` são aceitos pelo cliente; `8`–`15` ainda não têm captura nesta central.
+
+### PGM: on/off no status, cadastro no `0x0B50`
+
+Estado ligado/desligado: `payload[137:139]`, 16 bits, mesma ordem das zonas (LSB = menor índice do byte).
+
+| Byte | Índices |
+|------|---------|
+| `137` | 0–7 |
+| `138` | 8–15 |
+
+Confirmado: PGM 0 ligada → `payload[137] = 0x01`; desligada → `0x00`. Os bytes `19` e `37` não são on/off de PGM: no SDK são o 8º byte da máscara de zonas do usuário e o status da partição 16.
+
+Quais PGMs existem **não está no `0x0B4A`**. O cadastro (bitmap RF, inclusive PGM) está em [Dispositivos cadastrados — `0x0B50`](#dispositivos-cadastrados--0x0b50).
+
+O switch no HA expõe `index`, `number`, `tamper` (`payload[103:105]`), `low_battery` (`payload[119:121]`) e `comm_fail` (`payload[87:89]`). Ordem LSB igual ao on/off. Bits de falha vêm do SDK; ainda sem captura com PGM em defeito.
 
 ## Códigos de modelo
 
@@ -302,6 +369,7 @@ O projeto de referência possui uma tabela de códigos de modelo diferente, asso
 
 ## Referências
 
+- SDK Intelbras V2 — `docs/SDKCentraisDeAlarmeIntelbras-v1.0.1/SDKCentraisDeAlarmeIntelbras-v1.0.1.xlsx` (envelope ISECNet V2; mapa `0x0B4A` / `0x0B50` cruzado com o comando `STATUS_COMPLETO`)
 - [`bobaoapae/guardian-api-intelbras`](https://github.com/bobaoapae/guardian-api-intelbras) — projeto de referência original
 - [`caarlos0/homekit-amt8000`](https://github.com/caarlos0/homekit-amt8000) — implementação Go referenciada pelo cliente original
 - [`merencia/amt8000-hass-integration`](https://github.com/merencia/amt8000-hass-integration) — cliente Python referenciado pelo projeto original

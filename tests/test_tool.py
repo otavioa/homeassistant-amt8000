@@ -27,12 +27,54 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(status.partitions[0].index, 0)
 
     def test_status_json_is_safe_and_uses_hex_model(self) -> None:
-        status = self.client._parse_status(bytes(self.payload))
+        status = self.client._parse_status(bytes(self.payload), [0])
         data = amt8000_tool.status_to_dict(status)
 
         self.assertEqual(data["model"], "0x9A")
         self.assertEqual(data["firmware"], "4.1.2")
         self.assertNotIn("password", data)
+        self.assertEqual(
+            data["pgms"],
+            [
+                {"number": 1, "index": 0, "enabled": True, "on": False, "tamper": False, "low_battery": False, "comm_fail": False},
+            ],
+        )
+
+    def test_status_print_includes_pgms(self) -> None:
+        self.payload[137] = 0x01
+        status = self.client._parse_status(bytes(self.payload), [0])
+        output = StringIO()
+        with redirect_stdout(output):
+            amt8000_tool.print_status(status)
+        text = output.getvalue()
+        self.assertIn("PGMs:", text)
+        self.assertIn("PGM 1: ligada", text)
+        self.assertNotIn("PGM 2:", text)
+
+    def test_status_print_includes_pgm_trouble_flags(self) -> None:
+        self.payload[103] = 0x01
+        self.payload[119] = 0x01
+        self.payload[87] = 0x01
+        status = self.client._parse_status(bytes(self.payload), [0])
+        output = StringIO()
+        with redirect_stdout(output):
+            amt8000_tool.print_status(status)
+        text = output.getvalue()
+        self.assertIn("tamper", text)
+        self.assertIn("bateria baixa", text)
+        self.assertIn("falha rádio", text)
+
+    def test_raw_status_dump_labels_pgm_on_mask(self) -> None:
+        self.payload[137] = 0x01
+        frame = self.client._packet([0x0B, 0x4A], list(self.payload))
+        output = StringIO()
+        with redirect_stdout(output):
+            amt8000_tool.print_status_frame_details(frame)
+        text = output.getvalue()
+        self.assertIn("payload[137:138] PGMs ligadas", text)
+        self.assertIn("-> 1", text)
+        self.assertIn("payload[19]      não mapeado:", text)
+        self.assertNotIn("candidato PGM", text)
 
     def test_invalid_frame_is_rejected(self) -> None:
         frame = self.client._packet([0x0B, 0x4A], list(self.payload))
@@ -46,6 +88,36 @@ class ToolTests(unittest.TestCase):
 
         self.assertEqual(mac_packet[6:9], bytes([0x3F, 0xAA, 0x00]))
         self.assertEqual(keep_alive_packet[6:8], bytes([0xF0, 0xF7]))
+
+    def test_devices_command_packet_has_no_payload(self) -> None:
+        packet = self.client._packet(list(amt8000_tool.DEVICES_COMMAND))
+
+        self.assertEqual(packet[6:8], bytes([0x0B, 0x50]))
+        self.assertEqual(int.from_bytes(packet[4:6], "big"), 2)
+
+    def test_recorded_devices_decode_sdk_example(self) -> None:
+        payload = bytes.fromhex(
+            "03 00 00 00 00 00 00 00 00 00 00 00 00 0F 00 00 00 00 00 00 00 05 00 01 00 11 01 02 00"
+        )
+        decoded = amt8000_tool.decode_recorded_devices(payload)
+
+        self.assertEqual(decoded["keyfobs"], [0, 1])
+        self.assertEqual(decoded["sensors"], [1, 2, 3, 4])
+        self.assertEqual(decoded["keypads"], [1, 3])
+        self.assertEqual(decoded["sirens"], [1])
+        self.assertEqual(decoded["repeaters"], [1])
+        self.assertEqual(decoded["pgms"], [1, 5, 14])
+
+    def test_recorded_devices_print_lists_pgms(self) -> None:
+        payload = bytes.fromhex(
+            "03 00 00 00 00 00 00 00 00 00 00 00 00 0F 00 00 00 00 00 00 00 05 00 01 00 11 01 02 00"
+        )
+        output = StringIO()
+        with redirect_stdout(output):
+            amt8000_tool.print_recorded_devices(payload)
+        text = output.getvalue()
+        self.assertIn("PGMs: 1, 5, 14", text)
+        self.assertIn("sensores (zonas): 1, 2, 3, 4", text)
 
     def test_mac_response_is_decoded_from_response_payload(self) -> None:
         response = self.client._packet(

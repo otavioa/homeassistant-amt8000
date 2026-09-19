@@ -10,6 +10,7 @@ Native Home Assistant integration v2.0 for the **Intelbras AMT 8000** alarm pane
 - **Arm / Disarm per partition** — individual control of each configured partition
 - **Zone monitoring** — binary sensor per zone (open / closed / violated)
 - **Zone bypass** — switch per zone to bypass (anular) or restore (desanular) that zone
+- **PGM outputs** — switch per recorded programmable output (`0x0B50`); on/off from status `payload[137:139]`; extra attrs for index, tamper, low battery and radio failure
 - **Configurable zone types** — choose the Home Assistant device class for each zone; Door / Open-Closed is the default
 - **Open-zone protection** — arming can bypass open zones and arm in the same Home Assistant action when the switch is enabled
 - **Live siren detection** — binary sensor + event entity for automations
@@ -42,6 +43,8 @@ Read-only examples:
 python3 amt8000_tool.py --host 192.168.1.100 status
 python3 amt8000_tool.py --host 192.168.1.100 --json status
 python3 amt8000_tool.py --host 192.168.1.100 raw-status
+python3 amt8000_tool.py --host 192.168.1.100 devices
+python3 amt8000_tool.py --host 192.168.1.100 --json devices
 python3 amt8000_tool.py --host 192.168.1.100 --trace-auth status
 python3 amt8000_tool.py --host 192.168.1.100 mac --execute
 python3 amt8000_tool.py --host 192.168.1.100 keep-alive --execute
@@ -80,6 +83,7 @@ Todas as operações exibem a requisição e a resposta detalhadas, incluindo pa
 | `alarm_control_panel.amt8000_all_partitions` | Alarm panel | Virtual master panel that arms or disarms all user partitions at once. |
 | `binary_sensor.amt8000_zone_N` | Binary sensor | Open / closed. Extra attrs: violated, bypassed, tamper, low_battery. |
 | `switch.amt8000_zone_N_bypass` | Switch | On = zone bypassed (anulada, `0x01`). Off = zone active again (`0x00`, `--clear`). Anular was also confirmed with the panel armed. |
+| `switch.amt8000_pgm_N` | Switch | On/off for each recorded programmable output (`0x0B50`). State from `payload[137:139]`; control `0x45AF`. Extra attrs: `index`, `number`, `tamper`, `low_battery`, `comm_fail`. After upgrade, delete a leftover PGM 2 entity in the UI if it stays unavailable. |
 | `binary_sensor.amt8000_siren` | Binary sensor (sound) | True while siren is actively sounding. |
 | `switch.amt8000_allow_open_zone_bypass` | Switch | Allows automatic bypass of open zones when arming. Off by default. |
 | `event.amt8000_alarm` | Event | Fires `alarm_triggered` on siren rising edge. |

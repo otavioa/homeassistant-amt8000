@@ -16,14 +16,23 @@ _SRC = [0x8F, 0xE0]
 
 _CMD_AUTH       = [0xF0, 0xF0]
 _CMD_STATUS     = [0x0B, 0x4A]
+_CMD_DEVICES    = [0x0B, 0x50]
 _CMD_ARM        = [0x40, 0x1E]
 _CMD_BYPASS     = [0x40, 0x1F]
+_CMD_PGM        = [0x45, 0xAF]
 _CMD_DISCONNECT = [0xF0, 0xF1]
 
 _SUBCMD_DISARM = 0x00
 _SUBCMD_ARM    = 0x01
 
 ALL_PARTITIONS = 0xFF
+MAX_PGMS = 16
+# On/off is status payload[137:139] (16 bits). Existence comes from 0x0B50.
+_PGM_ON_OFFSET = 137
+_PGM_COMM_FAIL_OFFSET = 87
+_PGM_TAMPER_OFFSET = 103
+_PGM_LOW_BATTERY_OFFSET = 119
+_NACK = 0xF0FD
 
 _STATES = {0: "DISARMED", 1: "PARTIAL", 3: "ARMED"}
 _BATTERY = {1: "dead", 2: "low", 3: "middle", 4: "full"}
@@ -43,6 +52,10 @@ class OpenZones(Exception):
 
 class BypassError(Exception):
     """Raised when the panel rejects a zone bypass command."""
+
+
+class PgmError(Exception):
+    """Raised when the panel rejects a PGM command."""
 
 
 @dataclasses.dataclass
@@ -71,6 +84,16 @@ class Partition:
 
 
 @dataclasses.dataclass
+class Pgm:
+    index: int
+    enabled: bool
+    on: bool
+    tamper: bool
+    low_battery: bool
+    comm_fail: bool
+
+
+@dataclasses.dataclass
 class PanelStatus:
     model: int
     version: str
@@ -82,6 +105,7 @@ class PanelStatus:
     tamper: bool
     partitions: list[Partition]
     zones: list[Zone]
+    pgms: list[Pgm]
 
 
 class Amt8000Client:
@@ -167,16 +191,18 @@ class Amt8000Client:
         try:
             writer.write(self._packet(_CMD_STATUS))
             await writer.drain()
-            resp = await self._read_frame(reader)
-        except Exception:
+            status_resp = await self._read_frame(reader)
+            writer.write(self._packet(_CMD_DEVICES))
+            await writer.drain()
+            devices_resp = await self._read_frame(reader)
+        finally:
             await self._disconnect(writer)
-            raise
-        await self._disconnect(writer)
 
-        # payload = full_frame[8 : 8+payload_length]
-        length = int.from_bytes(resp[4:6], "big") - 2  # subtract 2 cmd bytes
-        payload = resp[8 : 8 + length]
-        return self._parse_status(payload)
+        payload = Amt8000Client._response_payload(status_resp)
+        pgm_indexes = Amt8000Client.recorded_pgm_indexes(
+            Amt8000Client._response_payload(devices_resp, expected=_CMD_DEVICES)
+        )
+        return self._parse_status(payload, pgm_indexes)
 
     async def arm_partition(self, partition_idx: int) -> None:
         await self._arm_cmd(partition_idx, _SUBCMD_ARM)
@@ -211,6 +237,28 @@ class Amt8000Client:
         finally:
             await self._disconnect(writer)
 
+    async def set_pgm(self, index: int, enabled: bool) -> None:
+        """Turn a PGM output on (enabled=True) or off (enabled=False)."""
+        if not 0 <= index < MAX_PGMS:
+            raise PgmError("Invalid PGM index")
+
+        flag = 0x01 if enabled else 0x00
+        reader, writer = await self._connect_and_auth()
+        try:
+            writer.write(self._packet(_CMD_PGM, [index, flag]))
+            await writer.drain()
+            response = await self._read_frame(reader)
+            if len(response) < 8:
+                raise PgmError("Invalid PGM response")
+
+            response_cmd = int.from_bytes(response[6:8], "big")
+            if response_cmd == 0xF0FD:
+                error_code = response[8] if len(response) > 8 else 0
+                _LOGGER.debug("PGM command NACK: 0x%02X", error_code)
+                raise PgmError("PGM command rejected")
+        finally:
+            await self._disconnect(writer)
+
     async def _arm_cmd(self, partition_idx: int, subcmd: int) -> None:
         reader, writer = await self._connect_and_auth()
         try:
@@ -230,7 +278,43 @@ class Amt8000Client:
     # ── status parser ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _parse_status(payload: bytes) -> PanelStatus:
+    def _response_payload(frame: bytes, expected: list[int] | None = None) -> bytes:
+        """Extract payload; empty on NACK, short frame, or unexpected command."""
+        if len(frame) < 8:
+            return b""
+        command = int.from_bytes(frame[6:8], "big")
+        if command == _NACK:
+            return b""
+        if expected is not None and command != int.from_bytes(bytes(expected), "big"):
+            return b""
+        length = int.from_bytes(frame[4:6], "big") - 2
+        if length < 0:
+            return b""
+        return frame[8 : 8 + length]
+
+    @staticmethod
+    def recorded_pgm_indexes(payload: bytes) -> list[int]:
+        """0-based PGM indexes marked recorded in 0x0B50 (SDK bytes 26–28)."""
+        if len(payload) < 26:
+            return []
+        indexes: list[int] = []
+        for bit in range(4):
+            if payload[25] & (1 << (4 + bit)):
+                indexes.append(bit)
+        if len(payload) >= 27:
+            for bit in range(8):
+                if payload[26] & (1 << bit):
+                    indexes.append(bit + 4)
+        if len(payload) >= 28:
+            for bit in range(4):
+                if payload[27] & (1 << bit):
+                    indexes.append(bit + 12)
+        return indexes
+
+    @staticmethod
+    def _parse_status(
+        payload: bytes, pgm_indexes: list[int] | None = None
+    ) -> PanelStatus:
         if len(payload) < 143:
             raise CannotConnect(f"Truncated status payload: {len(payload)} bytes (expected 143)")
 
@@ -275,4 +359,29 @@ class Amt8000Client:
             tamper=bool(payload[71] & 0x02),
             partitions=partitions,
             zones=zones,
+            pgms=Amt8000Client._parse_pgms(payload, pgm_indexes or []),
         )
+
+    @staticmethod
+    def _mask_bit(payload: bytes, offset: int, index: int) -> bool:
+        byte_index, bit_index = divmod(index, 8)
+        pos = offset + byte_index
+        if pos >= len(payload):
+            return False
+        return bool(payload[pos] & (1 << bit_index))
+
+    @staticmethod
+    def _parse_pgms(payload: bytes, indexes: list[int]) -> list[Pgm]:
+        """Build recorded PGMs; on/off and trouble bits from 0x0B4A masks."""
+        return [
+            Pgm(
+                index=i,
+                enabled=True,
+                on=Amt8000Client._mask_bit(payload, _PGM_ON_OFFSET, i),
+                tamper=Amt8000Client._mask_bit(payload, _PGM_TAMPER_OFFSET, i),
+                low_battery=Amt8000Client._mask_bit(payload, _PGM_LOW_BATTERY_OFFSET, i),
+                comm_fail=Amt8000Client._mask_bit(payload, _PGM_COMM_FAIL_OFFSET, i),
+            )
+            for i in indexes
+            if 0 <= i < MAX_PGMS
+        ]
