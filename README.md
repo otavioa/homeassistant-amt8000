@@ -22,6 +22,7 @@ Native Home Assistant integration v2.0 for the **Intelbras AMT 8000** alarm pane
 | Model | Firmware | Status |
 |-------|----------|--------|
 | AMT 8000 (model byte `0x8B`) | 3.2.5 | ✅ Working |
+| AMT 8000 (model byte `0x8B`) | 3.2.8 | ✅ Working |
 
 ## Installation via HACS
 
