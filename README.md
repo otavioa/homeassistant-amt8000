@@ -1,15 +1,15 @@
-# Intelbras AMT 8000 v2.0 — Home Assistant Integration
+# Intelbras AMT 8000 HA Control
 
 [![HACS Custom][hacs-shield]][hacs-url]
 [![GitHub Release][release-shield]][release-url]
 
-Native Home Assistant integration v2.0 for the **Intelbras AMT 8000** alarm panel, communicating directly over the local network via the ISECNet v2 protocol. No cloud dependency at runtime.
+Native Home Assistant integration for the **Intelbras AMT 8000** alarm panel, communicating directly over the local network via the ISECNet v2 protocol. No cloud dependency at runtime. This project continues [fdaneluzzi/homeassistant-amt8000](https://github.com/fdaneluzzi/homeassistant-amt8000), with extra local controls (zone bypass, PGM, diagnostic tool).
 
 ## Features
 
 - **Arm / Disarm per partition** — individual control of each configured partition
 - **Zone monitoring** — binary sensor per zone (open / closed / violated)
-- **Zone bypass** — switch per zone to bypass (anular) or restore (desanular) that zone
+- **Zone bypass** — switch per zone to bypass or restore that zone
 - **PGM outputs** — switch per recorded programmable output (`0x0B50`); on/off from status `payload[137:139]`; extra attrs for index, tamper, low battery and radio failure
 - **Configurable zone types** — choose the Home Assistant device class for each zone; Door / Open-Closed is the default
 - **Open-zone protection** — arming can bypass open zones and arm in the same Home Assistant action when the switch is enabled
@@ -28,8 +28,8 @@ Native Home Assistant integration v2.0 for the **Intelbras AMT 8000** alarm pane
 
 1. Open HACS → Integrations → ⋮ → **Custom repositories**
 2. Add `https://github.com/otavioa/homeassistant-amt8000` — Category: **Integration**
-3. Install **Intelbras AMT 8000 v2.0** and restart Home Assistant
-4. Go to **Settings → Devices & Services → Add Integration** → search **Intelbras AMT 8000**
+3. Install **Intelbras AMT 8000 HA Control** and restart Home Assistant
+4. Go to **Settings → Devices & Services → Add Integration** → search **Intelbras AMT 8000 HA Control**
 5. Enter your panel's IP, port (default `9009`), and password
 
 After setup, open the integration options to configure the device class of each zone. The default is **Door — Open/Closed**.
@@ -53,14 +53,14 @@ python3 amt8000_tool.py --host 192.168.1.100 arm --partition 1 --mode stay
 python3 amt8000_tool.py --host 192.168.1.100 watch --interval 5
 ```
 
-Para armar com zonas abertas, ative o bypass das zonas e depois repita o arme normal:
+To arm with open zones, bypass the zones first and then send a normal arm:
 
 ```bash
 python3 amt8000_tool.py --host 192.168.1.100 bypass --zone 3 --execute
 python3 amt8000_tool.py --host 192.168.1.100 arm --partition 1 --mode away --execute
 ```
 
-`raw-status` detalha o frame completo, separando cabeçalho, comando, checksum e os blocos do payload: modelo, firmware, máscaras de zonas, estado global, partições, tamper e bateria.
+`raw-status` dumps the full frame, splitting header, command, checksum and payload blocks: model, firmware, zone masks, global state, partitions, tamper and battery.
 
 Commands that change the panel state are disabled by default. Review the generated frame and use `--execute` only when the operation is intentional:
 
@@ -74,7 +74,7 @@ python3 amt8000_tool.py --host 192.168.1.100 siren-off --execute
 python3 amt8000_tool.py --host 192.168.1.100 pgm --index 0 --state on --execute
 ```
 
-Todas as operações exibem a requisição e a resposta detalhadas, incluindo payload, ACK/NACK e checksum. Use `--trace-auth` para ver a estrutura da autenticação com os seis bytes da senha mascarados. Pânico, sirene e PGM podem causar efeitos físicos e exigem revisão cuidadosa antes de usar `--execute`. A senha é solicitada interativamente e não é exibida. Não compartilhe capturas de autenticação ou relatórios contendo detalhes da rede.
+Every operation prints the request and the response in detail, including payload, ACK/NACK and checksum. Use `--trace-auth` to inspect the authentication structure with the six password bytes masked. Panic, siren and PGM can cause physical effects and need a careful review before `--execute`. The password is prompted interactively and is not displayed. Do not share authentication captures or reports that contain network details.
 
 ## Entities created
 
@@ -83,7 +83,7 @@ Todas as operações exibem a requisição e a resposta detalhadas, incluindo pa
 | `alarm_control_panel.amt8000_partition_N` | Alarm panel | One per configured partition. Arm Away / Disarm. |
 | `alarm_control_panel.amt8000_all_partitions` | Alarm panel | Virtual master panel that arms or disarms all user partitions at once. |
 | `binary_sensor.amt8000_zone_N` | Binary sensor | Open / closed. Extra attrs: violated, bypassed, tamper, low_battery. |
-| `switch.amt8000_zone_N_bypass` | Switch | On = zone bypassed (anulada, `0x01`). Off = zone active again (`0x00`, `--clear`). Anular was also confirmed with the panel armed. |
+| `switch.amt8000_zone_N_bypass` | Switch | On = zone bypassed (`0x01`). Off = zone active again (`0x00`, `--clear`). Bypass was also confirmed with the panel armed. |
 | `switch.amt8000_pgm_N` | Switch | On/off for each recorded programmable output (`0x0B50`). State from `payload[137:139]`; control `0x45AF`. Extra attrs: `index`, `number`, `tamper`, `low_battery`, `comm_fail`. After upgrade, delete a leftover PGM 2 entity in the UI if it stays unavailable. |
 | `binary_sensor.amt8000_siren` | Binary sensor (sound) | True while siren is actively sounding. |
 | `switch.amt8000_allow_open_zone_bypass` | Switch | Allows automatic bypass of open zones when arming. Off by default. |

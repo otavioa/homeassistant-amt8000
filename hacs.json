@@ -1,5 +1,5 @@
 {
-  "name": "Intelbras AMT 8000",
+  "name": "Intelbras AMT 8000 HA Control",
   "homeassistant": "2024.1.0",
   "country": ["BR"]
 }
