@@ -265,7 +265,7 @@ Payload:
 | Byte | Valor | Significado |
 |------|-------|-------------|
 | `partition_index` | `0x01`–`0x0F` | Partição individual |
-| `partition_index` | `0xFF` | Todas as partições |
+| `partition_index` | `0xFF` | Todas as partições. Entidade HA `Panel`. |
 | `operation` | `0x00` | Desarmar |
 | `operation` | `0x01` | Armar total/away |
 | `operation` | `0x02` | Armar stay/parcial — documentado no projeto irmão, não validado localmente |

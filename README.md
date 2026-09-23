@@ -89,10 +89,18 @@ Every operation prints the request and the response in detail, including payload
 
 ## Entities created
 
+```text
+Panel                          Arm / disarm the whole panel (0xFF). Alarm event. Open-zone bypass policy.
+  Partitions                   One alarm panel each. Arm away / disarm.
+  Zones                        Open/closed sensor. Bypass switch. Violated, tamper, low battery.
+  PGMs                         On/off switch per recorded output. Tamper, low battery, comm fail.
+  Sirens                       Global siren: sounding, silence, panic. One diagnostic sensor per RF siren: fault, tamper, low battery.
+```
+
 | Entity | Type | Description |
 |--------|------|-------------|
 | `alarm_control_panel.amt8000_partition_N` | Alarm panel | One per configured partition. Arm Away / Disarm. |
-| `alarm_control_panel.amt8000_all_partitions` | Alarm panel | Virtual master panel that arms or disarms all user partitions at once. |
+| `alarm_control_panel.amt8000_panel` | Alarm panel | Arms or disarms the whole panel (`0xFF`). |
 | `binary_sensor.amt8000_zone_N` | Binary sensor | Open / closed. Extra attrs: violated, bypassed, tamper, low_battery. |
 | `switch.amt8000_zone_N_bypass` | Switch | On = zone bypassed (`0x01`). Off = zone active again (`0x00`, `--clear`). Bypass was also confirmed with the panel armed. |
 | `switch.amt8000_pgm_N` | Switch | On/off for each recorded programmable output (`0x0B50`). State from `payload[137:139]`; control `0x45AF`. Extra attrs: `index`, `number`, `tamper`, `low_battery`, `comm_fail`. After upgrade, delete a leftover PGM 2 entity in the UI if it stays unavailable. |
@@ -109,7 +117,7 @@ The former `binary_sensor` for the global siren was replaced by `siren.amt8000_s
 
 The AMT 8000 uses **ISECNet v2** (TCP 9009), which is distinct from the `0xe7` protocol used by lower-end AMT models (1016/2018 NET).
 
-Partition index 0 in the protocol is a read-only AND-aggregate (armed only when all real partitions are armed) and is intentionally excluded from HA entities. User partitions start at protocol index 1. The virtual **All Partitions** entity uses the protocol command `0xFF` to arm or disarm all user partitions.
+Partition index 0 in the protocol is a read-only AND-aggregate (armed only when all real partitions are armed) and is intentionally excluded from HA entities. User partitions start at protocol index 1. The **Panel** entity uses the protocol command `0xFF` to arm or disarm all user partitions.
 
 Full protocol documentation in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 

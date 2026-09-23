@@ -126,7 +126,7 @@ async def async_setup_entry(
         for p in coordinator.data.partitions
         if p.index != AGGREGATE_PARTITION_IDX
     ]
-    entities.append(Amt8000MasterPanel(coordinator, entry))
+    entities.append(Amt8000Panel(coordinator, entry))
     async_add_entities(entities)
 
 
@@ -195,8 +195,11 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
         await self.coordinator.async_request_refresh()
 
 
-class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPanelEntity):
-    """Virtual panel that arms/disarms all user partitions at once."""
+class Amt8000Panel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPanelEntity):
+    """Arms and disarms every user partition (0xFF).
+
+    A future Panel Status sensor uses the same device (_device_info).
+    """
 
     _attr_has_entity_name = True
     _attr_supported_features = AlarmControlPanelEntityFeature.ARM_AWAY
@@ -205,8 +208,8 @@ class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPane
 
     def __init__(self, coordinator: Amt8000Coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_all"
-        self._attr_name = "All Partitions"
+        self._attr_unique_id = f"{entry.entry_id}_panel"
+        self._attr_name = "Panel"
         self._attr_device_info = _device_info(entry)
 
     def _real_partitions(self):
@@ -239,7 +242,7 @@ class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPane
         try:
             await self.coordinator.client.arm_partition(ALL_PARTITIONS)
         except OpenZones:
-            _LOGGER.warning("Master arm blocked — open zones")
+            _LOGGER.warning("Panel arm blocked — open zones")
             await self.coordinator.async_request_refresh()
             await _arm_with_open_zone_policy(self, ALL_PARTITIONS)
             return
