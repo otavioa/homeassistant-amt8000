@@ -93,10 +93,12 @@ class DiagnosticClient(Amt8000Client):
             await self._disconnect(writer)
 
         payload = Amt8000Client._response_payload(frame)
-        pgm_indexes = Amt8000Client.recorded_pgm_indexes(
-            Amt8000Client._response_payload(devices_frame, expected=list(DEVICES_COMMAND))
+        devices_payload = Amt8000Client._response_payload(
+            devices_frame, expected=list(DEVICES_COMMAND)
         )
-        return self._parse_status(payload, pgm_indexes), frame, request
+        pgm_indexes = Amt8000Client.recorded_pgm_indexes(devices_payload)
+        siren_numbers = Amt8000Client.recorded_siren_numbers(devices_payload)
+        return self._parse_status(payload, pgm_indexes, siren_numbers), frame, request
 
     async def send_command_frame(self, command: bytes, payload: bytes = b"") -> bytes:
         reader, writer = await self._connect_and_auth()
@@ -123,11 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("status", help="Consulta e decodifica o status")
+    subparsers.add_parser("status", help="Consulta e decodifica o status (sirene disparada e RF)")
     subparsers.add_parser("raw-status", help="Exibe o frame de status em hexadecimal")
     subparsers.add_parser(
         "devices",
-        help="Consulta dispositivos RF cadastrados (comando 0x0B50)",
+        help="Lista dispositivos RF cadastrados (0x0B50): zonas, sirenes, PGMs, etc.",
     )
 
     for command, description in (
@@ -141,7 +143,10 @@ def build_parser() -> argparse.ArgumentParser:
             help="Confirma que o comando deve ser enviado à central",
         )
 
-    panic = subparsers.add_parser("panic", help="Dispara um tipo de pânico")
+    panic = subparsers.add_parser(
+        "panic",
+        help="Dispara pânico (0x401A). Tipos: silent|audible|fire|medical. Exige --execute",
+    )
     panic.add_argument(
         "--type",
         choices=("silent", "audible", "fire", "medical"),
@@ -150,7 +155,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     panic.add_argument("--execute", action="store_true", help="Confirma o envio à central")
 
-    siren = subparsers.add_parser("siren-off", help="Desliga a sirene ativa")
+    siren = subparsers.add_parser(
+        "siren-off",
+        help="Silencia a sirene disparada (0x4019), mantendo o arme. Exige --execute",
+    )
     siren.add_argument("--execute", action="store_true", help="Confirma o envio à central")
 
     pgm = subparsers.add_parser("pgm", help="Liga ou desliga uma saída PGM")
@@ -271,7 +279,7 @@ def print_status_frame_details(frame: bytes) -> None:
         f"(arme={arm_states.get(arm_state, 'desconhecido')}, "
         f"zonas_firing={'sim' if status_byte & 0x08 else 'não'}, "
         f"zonas_fechadas={'sim' if status_byte & 0x04 else 'não'}, "
-        f"sirene={'sim' if status_byte & 0x02 else 'não'})"
+        f"sirene={'disparada' if status_byte & 0x02 else 'não disparada'})"
     )
 
     print("  payload[21:37]    partições:")
@@ -297,11 +305,22 @@ def print_status_frame_details(frame: bytes) -> None:
     print_mask_block("zonas em bypass", payload, 54, 61, 56)
     print(f"  payload[62:71]   não mapeado: {hex_bytes(payload[62:71])}")
     print(f"  payload[71]      tamper da central: {payload[71]:02X} ({'detectado' if payload[71] & 0x02 else 'normal'})")
-    print(f"  payload[72:89]   não mapeado: {hex_bytes(payload[72:89])}")
+    print(f"  payload[72:81]   não mapeado: {hex_bytes(payload[72:81])}")
+    print_mask_block("falha teclado (SDK)", payload, 81, 82, 16)
+    print_mask_block("falha sirene RF (SDK)", payload, 83, 84, 16)
+    print_mask_block("falha repetidor (SDK)", payload, 85, 86, 16)
+    print_mask_block("falha comunicação PGM", payload, 87, 88, MAX_PGMS)
     print_mask_block("tamper das zonas", payload, 89, 95, 56)
-    print(f"  payload[96:105]  não mapeado: {hex_bytes(payload[96:105])}")
+    print_mask_block("tamper teclado (SDK)", payload, 97, 98, 16)
+    print_mask_block("tamper sirene RF (SDK)", payload, 99, 100, 16)
+    print(f"  payload[101:103] tamper repetidor (SDK): {hex_bytes(payload[101:103])}")
+    print_mask_block("tamper PGM", payload, 103, 104, MAX_PGMS)
     print_mask_block("bateria baixa nas zonas", payload, 105, 111, 56)
-    print(f"  payload[112:134] não mapeado: {hex_bytes(payload[112:134])}")
+    print_mask_block("bateria teclado (SDK)", payload, 113, 114, 16)
+    print_mask_block("bateria sirene RF (SDK)", payload, 115, 116, 16)
+    print(f"  payload[117:119] bateria repetidor (SDK): {hex_bytes(payload[117:119])}")
+    print_mask_block("bateria baixa PGM", payload, 119, 120, MAX_PGMS)
+    print(f"  payload[121:134] não mapeado: {hex_bytes(payload[121:134])}")
     print(f"  payload[134]     bateria da central: {payload[134]:02X} ({battery_names.get(payload[134], 'desconhecida')})")
     print(f"  payload[135:137] não mapeado: {hex_bytes(payload[135:137])}")
     print_mask_block("PGMs ligadas", payload, 137, 138, MAX_PGMS)
@@ -332,6 +351,7 @@ def status_to_dict(status: PanelStatus) -> dict:
             }
             for pgm in status.pgms
         ],
+        "sirens": [asdict(siren) for siren in status.sirens],
     }
 
 
@@ -339,7 +359,7 @@ def print_status(status: PanelStatus) -> None:
     print(f"Modelo: 0x{status.model:02X}")
     print(f"Firmware: {status.version}")
     print(f"Estado: {status.state}")
-    print(f"Sirene: {'ativa' if status.siren_live else 'inativa'}")
+    print(f"Sirene: {'disparada' if status.siren_live else 'não disparada'}")
     print(f"Zonas acionadas: {'sim' if status.zones_firing else 'não'}")
     print(f"Zonas fechadas: {'sim' if status.zones_closed else 'não'}")
     print(f"Bateria: {status.battery}")
@@ -387,6 +407,19 @@ def print_status(status: PanelStatus) -> None:
             flags.append("falha rádio")
         suffix = f" ({', '.join(flags)})" if flags else ""
         print(f"  PGM {pgm.index + 1}: {state}{suffix}")
+
+    print("Sirenes RF:")
+    if not status.sirens:
+        print("  (nenhuma)")
+    for siren in status.sirens:
+        flags = []
+        if siren.fault:
+            flags.append("falha")
+        if siren.tamper:
+            flags.append("tamper")
+        if siren.low_battery:
+            flags.append("bateria baixa")
+        print(f"  Sirene {siren.number}: {', '.join(flags) if flags else 'ok'}")
 
 
 def parse_partition(value: str) -> int:
@@ -479,7 +512,7 @@ def decode_recorded_devices(payload: bytes) -> dict[str, list[int]]:
     keyfobs = enabled_indexes(payload[0:13], 98, start=0) if payload else []
     sensors = enabled_indexes(payload[13:21], 64, start=1) if len(payload) >= 14 else []
     keypads = enabled_indexes(payload[21:23], 16, start=1) if len(payload) >= 22 else []
-    sirens = enabled_indexes(payload[23:25], 16, start=1) if len(payload) >= 24 else []
+    sirens = Amt8000Client.recorded_siren_numbers(payload)
     repeaters: list[int] = []
     if len(payload) >= 26:
         for bit in range(4):

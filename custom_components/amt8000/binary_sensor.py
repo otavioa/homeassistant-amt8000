@@ -1,4 +1,4 @@
-"""Binary sensors — one per zone plus a siren sensor."""
+"""Binary sensors — zones and recorded RF sirens (diagnostics)."""
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import (
@@ -23,7 +23,10 @@ async def async_setup_entry(
         Amt8000ZoneSensor(coordinator, zone.number, entry)
         for zone in coordinator.data.zones
     ]
-    entities.append(Amt8000SirenSensor(coordinator, entry))
+    entities.extend(
+        Amt8000ExternalSirenSensor(coordinator, siren.number, entry)
+        for siren in coordinator.data.sirens
+    )
     async_add_entities(entities)
 
 
@@ -72,18 +75,41 @@ class Amt8000ZoneSensor(CoordinatorEntity[Amt8000Coordinator], BinarySensorEntit
         }
 
 
-class Amt8000SirenSensor(CoordinatorEntity[Amt8000Coordinator], BinarySensorEntity):
-    _attr_has_entity_name = True
-    _attr_device_class = BinarySensorDeviceClass.SOUND
+class Amt8000ExternalSirenSensor(CoordinatorEntity[Amt8000Coordinator], BinarySensorEntity):
+    """RF siren registered in 0x0B50 — diagnostics in attributes (no problem class)."""
 
-    def __init__(self, coordinator: Amt8000Coordinator, entry: ConfigEntry) -> None:
+    _attr_has_entity_name = True
+
+    def __init__(
+        self, coordinator: Amt8000Coordinator, siren_number: int, entry: ConfigEntry
+    ) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_siren"
-        self._attr_name = "Siren"
+        self._siren_number = siren_number
+        self._attr_unique_id = f"{entry.entry_id}_siren_rf_{siren_number}"
+        self._attr_name = f"Siren {siren_number}"
         self._attr_device_info = _device_info(entry)
+
+    def _siren(self):
+        if not self.coordinator.data:
+            return None
+        for s in self.coordinator.data.sirens:
+            if s.number == self._siren_number:
+                return s
+        return None
 
     @property
     def is_on(self) -> bool | None:
-        if not self.coordinator.data:
-            return None
-        return self.coordinator.data.siren_live
+        # Entity exists only when registered; on = present/registered (not sounding).
+        return self._siren() is not None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        s = self._siren()
+        if s is None:
+            return {}
+        return {
+            "number": s.number,
+            "fault": s.fault,
+            "tamper": s.tamper,
+            "low_battery": s.low_battery,
+        }

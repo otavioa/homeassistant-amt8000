@@ -39,6 +39,7 @@ class ToolTests(unittest.TestCase):
                 {"number": 1, "index": 0, "enabled": True, "on": False, "tamper": False, "low_battery": False, "comm_fail": False},
             ],
         )
+        self.assertEqual(data["sirens"], [])
 
     def test_status_print_includes_pgms(self) -> None:
         self.payload[137] = 0x01
@@ -50,6 +51,17 @@ class ToolTests(unittest.TestCase):
         self.assertIn("PGMs:", text)
         self.assertIn("PGM 1: ligada", text)
         self.assertNotIn("PGM 2:", text)
+        self.assertIn("Sirenes RF:", text)
+        self.assertIn("(nenhuma)", text)
+
+    def test_status_print_includes_siren_rf(self) -> None:
+        self.payload[83] = 0x01
+        status = self.client._parse_status(bytes(self.payload), [], [1])
+        output = StringIO()
+        with redirect_stdout(output):
+            amt8000_tool.print_status(status)
+        text = output.getvalue()
+        self.assertIn("Sirene 1: falha", text)
 
     def test_status_print_includes_pgm_trouble_flags(self) -> None:
         self.payload[103] = 0x01
@@ -74,6 +86,8 @@ class ToolTests(unittest.TestCase):
         self.assertIn("payload[137:138] PGMs ligadas", text)
         self.assertIn("-> 1", text)
         self.assertIn("payload[19]      não mapeado:", text)
+        self.assertIn("falha sirene RF (SDK)", text)
+        self.assertIn("tamper sirene RF (SDK)", text)
         self.assertNotIn("candidato PGM", text)
 
     def test_invalid_frame_is_rejected(self) -> None:
@@ -118,6 +132,15 @@ class ToolTests(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("PGMs: 1, 5, 14", text)
         self.assertIn("sensores (zonas): 1, 2, 3, 4", text)
+        self.assertIn("sirenes: 1", text)
+
+    def test_panic_and_siren_off_parser_require_execute_flag(self) -> None:
+        parser = amt8000_tool.build_parser()
+        panic = parser.parse_args(["panic", "--type", "fire"])
+        self.assertEqual(panic.type, "fire")
+        self.assertFalse(panic.execute)
+        siren = parser.parse_args(["siren-off"])
+        self.assertFalse(siren.execute)
 
     def test_mac_response_is_decoded_from_response_payload(self) -> None:
         response = self.client._packet(

@@ -13,7 +13,9 @@ Native Home Assistant integration for the **Intelbras AMT 8000** alarm panel, co
 - **PGM outputs** — switch per recorded programmable output (`0x0B50`); on/off from status `payload[137:139]`; extra attrs for index, tamper, low battery and radio failure
 - **Configurable zone types** — choose the Home Assistant device class for each zone; Door / Open-Closed is the default
 - **Open-zone protection** — arming can bypass open zones and arm in the same Home Assistant action when the switch is enabled
-- **Live siren detection** — binary sensor + event entity for automations
+- **Siren entity** — native `siren` with live sounding state, silence (`0x4019`), and panic tones (`0x401A`)
+- **RF siren diagnostics** — binary sensor per recorded wireless siren (`0x0B50`); attrs for fault, tamper, low battery (SDK — validate with the tool)
+- **Alarm event** — fires when a partition starts firing (`TRIGGERED`), not when the siren sounds
 - **Device triggers** — "Alarm triggered" trigger in the automation UI (no YAML needed)
 - **Local only** — direct TCP connection to the panel on port 9009
 
@@ -36,7 +38,15 @@ After setup, open the integration options to configure the device class of each 
 
 ## Local diagnostic utility
 
-The repository includes [`amt8000_tool.py`](amt8000_tool.py), a standalone utility that does not require Home Assistant to be installed. It reads the panel model, firmware, partitions, zones, siren, battery and tamper status, and can display the raw status frame in hexadecimal.
+The repository includes [`amt8000_tool.py`](amt8000_tool.py), a standalone utility that does not require Home Assistant to be installed. It reads the panel model, firmware, partitions, zones, global siren, RF sirens, battery and tamper status, and can display the raw status frame in hexadecimal.
+
+Use the tool to validate RF siren registration and diagnostic bits before trusting HA attributes:
+
+```bash
+python3 amt8000_tool.py --host 192.168.1.100 devices
+python3 amt8000_tool.py --host 192.168.1.100 status
+python3 amt8000_tool.py --host 192.168.1.100 raw-status
+```
 
 Read-only examples:
 
@@ -60,7 +70,7 @@ python3 amt8000_tool.py --host 192.168.1.100 bypass --zone 3 --execute
 python3 amt8000_tool.py --host 192.168.1.100 arm --partition 1 --mode away --execute
 ```
 
-`raw-status` dumps the full frame, splitting header, command, checksum and payload blocks: model, firmware, zone masks, global state, partitions, tamper and battery.
+`raw-status` dumps the full frame, splitting header, command, checksum and payload blocks: model, firmware, zone masks, global state, partitions, tamper, siren and battery.
 
 Commands that change the panel state are disabled by default. Review the generated frame and use `--execute` only when the operation is intentional:
 
@@ -70,6 +80,7 @@ python3 amt8000_tool.py --host 192.168.1.100 disarm --partition 1 --execute
 python3 amt8000_tool.py --host 192.168.1.100 bypass --zone 3 --execute
 python3 amt8000_tool.py --host 192.168.1.100 bypass --zone 3 --clear --execute
 python3 amt8000_tool.py --host 192.168.1.100 panic --type audible --execute
+python3 amt8000_tool.py --host 192.168.1.100 panic --type silent --execute
 python3 amt8000_tool.py --host 192.168.1.100 siren-off --execute
 python3 amt8000_tool.py --host 192.168.1.100 pgm --index 0 --state on --execute
 ```
@@ -85,9 +96,14 @@ Every operation prints the request and the response in detail, including payload
 | `binary_sensor.amt8000_zone_N` | Binary sensor | Open / closed. Extra attrs: violated, bypassed, tamper, low_battery. |
 | `switch.amt8000_zone_N_bypass` | Switch | On = zone bypassed (`0x01`). Off = zone active again (`0x00`, `--clear`). Bypass was also confirmed with the panel armed. |
 | `switch.amt8000_pgm_N` | Switch | On/off for each recorded programmable output (`0x0B50`). State from `payload[137:139]`; control `0x45AF`. Extra attrs: `index`, `number`, `tamper`, `low_battery`, `comm_fail`. After upgrade, delete a leftover PGM 2 entity in the UI if it stays unavailable. |
-| `binary_sensor.amt8000_siren` | Binary sensor (sound) | True while siren is actively sounding. |
+| `siren.amt8000_siren` | Siren | On while panel siren is sounding (`siren_live`). `turn_off` silences (`0x4019`). `turn_on` with tone triggers panic (`silent` / `audible` / `fire` / `medical`). |
+| `binary_sensor.amt8000_siren_N` | Binary sensor | One per RF siren in `0x0B50`. On = registered/present (not sounding). Extra attrs: `number`, `fault`, `tamper`, `low_battery` (SDK — validate with the tool). |
 | `switch.amt8000_allow_open_zone_bypass` | Switch | Allows automatic bypass of open zones when arming. Off by default. |
-| `event.amt8000_alarm` | Event | Fires `alarm_triggered` on siren rising edge. |
+| `event.amt8000_alarm` | Event | Fires `alarm_triggered` when a partition starts firing (alarm `TRIGGERED`), not on siren rising edge. |
+
+### Migration note
+
+The former `binary_sensor` for the global siren was replaced by `siren.amt8000_siren`. Update automations that watched that binary sensor. For “siren started sounding”, use `siren` `off → on`. For “alarm triggered”, keep using `event.amt8000_alarm` (now tied to partition firing).
 
 ## Protocol notes
 
