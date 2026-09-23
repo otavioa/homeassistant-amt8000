@@ -11,7 +11,9 @@ O AMT 8000 usa o mesmo protocolo `0xe7` nativo (TCP 9009) já confirmado nos mod
 - Armar / desarmar partições (grupos) individualmente
 - Status em tempo real de cada zona (aberta / fechada / em alarme)
 - Controle de PGMs (saídas programáveis) via comando `0x45AF`
-- Notificações de alarme via HA (evento HA + automação iOS)
+- Entidade `siren` (estado ao vivo, silenciar, pânico por tone)
+- Diagnóstico de sirenes RF cadastradas (leitura)
+- Notificações de alarme via HA (evento na borda de `partition.firing` + automação)
 - Comunicação 100% local (LAN), sem dependência de cloud Intelbras em runtime
 
 ### Fora
@@ -26,7 +28,7 @@ O AMT 8000 usa o mesmo protocolo `0xe7` nativo (TCP 9009) já confirmado nos mod
 - Entidade `alarm_control_panel` no HA refletindo o estado arm/disarm do AMT 8000 em tempo real
 - Comandos arm / disarm executados com confirmação de estado
 - `binary_sensor` por zona mostrando aberta / fechada
-- Evento HA disparado quando o alarme é acionado (sirene ativa)
+- Evento HA disparado quando uma partição entra em disparo (`firing` / `TRIGGERED`)
 
 ### Aceitável-parcial
 - Se partições individuais forem inacessíveis: arm/disarm global apenas

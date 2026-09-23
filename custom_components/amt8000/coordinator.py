@@ -22,7 +22,7 @@ class Amt8000Coordinator(DataUpdateCoordinator[PanelStatus]):
             update_interval=timedelta(seconds=SCAN_INTERVAL_SECONDS),
         )
         self.client = client
-        self._prev_siren = False
+        self._prev_firing = False
         self._consecutive_failures = 0
         self._last_status: PanelStatus | None = None
         self.allow_open_zone_bypass = False
@@ -47,12 +47,13 @@ class Amt8000Coordinator(DataUpdateCoordinator[PanelStatus]):
         self._consecutive_failures = 0
         self._last_status = status
 
-        # Rising edge on siren → fire HA event for automations
-        if status.siren_live and not self._prev_siren:
+        # Rising edge on partition firing → HA bus event for automations
+        firing = any(p.firing for p in status.partitions)
+        if firing and not self._prev_firing:
             self.hass.bus.async_fire(
                 EVENT_ALARM_TRIGGERED,
                 {"partitions_firing": [p.index for p in status.partitions if p.firing]},
             )
-        self._prev_siren = status.siren_live
+        self._prev_firing = firing
 
         return status

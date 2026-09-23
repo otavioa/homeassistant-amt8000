@@ -67,9 +67,9 @@ O catálogo abaixo vem da documentação/implementação do `guardian-api-intelb
 | `DISCONNECT` | `0xF0F1` | Sem payload | Sim, usado ao fechar sessão |
 | `SYSTEM_ARM_DISARM` | `0x401E` | `[partition, operation]` | Sim, arme/desarme |
 | `ALARM_PANEL_STATUS` | `0x0B4A` | Sem payload na requisição | Sim |
-| `DISPOSITIVOS_CADASTRADOS` | `0x0B50` | Sem payload na requisição; resposta: 29 bytes | Sim: tool `devices` e `get_status` do cliente (PGMs cadastradas) |
-| `PANIC_ALARM` | `0x401A` | `[panic_type]` | Não; não habilitado |
-| `TURN_OFF_SIREN` | `0x4019` | Sem payload | Não; não habilitado |
+| `DISPOSITIVOS_CADASTRADOS` | `0x0B50` | Sem payload na requisição; resposta: 29 bytes | Sim: tool `devices` e `get_status` do cliente (PGMs e sirenes RF cadastradas) |
+| `PANIC_ALARM` | `0x401A` | `[panic_type]` | Sim: tool `panic` e entidade HA `siren` (`turn_on` + tone) |
+| `TURN_OFF_SIREN` | `0x4019` | Sem payload | Sim: tool `siren-off` e entidade HA `siren` (`turn_off`) |
 | `BYPASS_ZONE` | `0x401F` | `[zone_index, bypass]` | Sim: anular (`0x01`) e reativar (`0x00`) por zona. `0x01` também com a central armada (Guardian e `amt8000_tool.py`); `0x00` via `amt8000_tool.py --clear` |
 | `GET_MAC` | `0x3FAA` | `[0x00]` | Sim |
 | `PGM_ON_OFF` | `0x45AF` | `[pgm_index, state]` | Sim: índice `0` ligar/desligar com ACK local. Índices `1`–`15` aceitos pelo cliente; `8`–`15` ainda sem captura |
@@ -170,20 +170,20 @@ Máscaras de zona no SDK têm **64 bits** (8 bytes). O cliente HA ainda lê **56
 | `38–45` | 39–46 | Zonas abertas | 64 bits. HA lê `38–44` (56). |
 | `46–53` | 47–54 | Zonas em alarme / violadas | 64 bits. HA lê `46–52` (56). |
 | `54–61` | 55–62 | Bypass | 64 bits. HA lê 56 bits a partir de `54`. |
-| `62–63` | 63–64 | Sirenes 1 e 2 | SDK. |
+| `62–63` | 63–64 | Sirenes 1 e 2 | SDK; HA ainda não usa como status ao vivo por unidade. |
 | `64–69` | 65–70 | Relógio BCD | Dia, mês, ano, hora, minuto, segundo. Validado na captura. |
 | `70` | 71 | Pânico | SDK. |
 | `71–72` | 72–73 | Falhas gerais | AC, bateria, RF, Ethernet, etc. HA usa `payload[71] bit 1` como tamper da central. |
 | `73–80` | 74–81 | Falha de comunicação (sensor) | SDK. |
 | `81–82` | 82–83 | Falha teclado | SDK. |
-| `83–84` | 84–85 | Falha sirene | SDK. |
+| `83–84` | 84–85 | Falha sirene | SDK; HA lê 16 bits para sirenes RF cadastradas (`fault`). Pendente captura com falha real. |
 | `85–86` | 86–87 | Falha repetidor | SDK. |
 | `87–88` | 88–89 | Falha comunicação PGM | 16 bits. HA lê para PGM cadastrada (`comm_fail`). SDK; sem captura de falha real. |
 | `89–96` | 90–97 | Tamper sensor | 64 bits. HA lê `89–95` (56). |
-| `97–102` | 98–103 | Tamper teclado / sirene / repetidor | SDK. |
+| `97–102` | 98–103 | Tamper teclado / sirene / repetidor | SDK. Hipótese HA: `97–98` teclado, `99–100` sirene RF (`tamper`), `101–102` repetidor. Pendente captura. |
 | `103–104` | 104–105 | Tamper PGM | 16 bits. HA lê para PGM cadastrada (`tamper`). SDK; sem captura de falha real. |
 | `105–112` | 106–113 | Bateria baixa (sensor) | 64 bits. HA lê `105–111` (56). |
-| `113–118` | 114–119 | Bateria teclado / sirene / repetidor | SDK. |
+| `113–118` | 114–119 | Bateria teclado / sirene / repetidor | SDK. Hipótese HA: `113–114` teclado, `115–116` sirene RF (`low_battery`), `117–118` repetidor. Pendente captura. |
 | `119–120` | 120–121 | Bateria baixa PGM | 16 bits. HA lê para PGM cadastrada (`low_battery`). SDK; sem captura de falha real. |
 | `121–133` | 122–134 | Bateria keyfob | SDK. |
 | `134` | 135 | Bateria da central | `1` morta, `2` baixa, `3` média, `4` cheia. Validado. |
@@ -198,7 +198,9 @@ Máscaras de zona no SDK têm **64 bits** (8 bytes). O cliente HA ainda lê **56
 | `6:5` | `0` desarmada, `1` parcial, `3` armada total |
 | `3` | Zonas disparando |
 | `2` | Zonas fechadas |
-| `1` | Sirene ativa |
+| `1` | Sirene disparada (`siren_live`) — estado da entidade HA `siren` |
+
+O evento HA `alarm_triggered` (entity `event` + bus `amt8000_alarm_triggered`) dispara na **borda de subida de `partition.firing`**, não em `siren_live`. Assim o evento permanece ligado ao alarme mesmo se a sirene for silenciada ou o pânico for silencioso.
 
 ### Status de cada partição
 
@@ -309,20 +311,42 @@ Comando sem payload, usado para manter uma sessão persistente e verificar se a 
 
 ## Pânico — `0x401A`
 
-O projeto de referência documenta payload de um byte:
+Payload de um byte:
 
-| Valor | Tipo |
-|-------|------|
-| `0` | Silencioso |
-| `1` | Audível |
-| `2` | Fogo |
-| `3` | Médico |
+| Valor | Tipo | Tone HA / tool `--type` |
+|-------|------|-------------------------|
+| `0` | Silencioso | `silent` |
+| `1` | Audível | `audible` |
+| `2` | Fogo | `fire` |
+| `3` | Médico | `medical` |
 
-Não está habilitado neste projeto por ter efeito físico/operacional direto.
+Habilitado na tool (`panic --type … --execute`) e na entidade HA `siren` via `siren.turn_on` com `tone`. Efeito físico/operacional — exige confirmação explícita na tool.
 
 ## Desligar sirene — `0x4019`
 
-O projeto de referência indica comando sem payload para silenciar a sirene mantendo o estado de arme. Não está habilitado neste projeto.
+Comando sem payload para silenciar a sirene mantendo o estado de arme. Habilitado na tool (`siren-off --execute`) e na entidade HA `siren` via `siren.turn_off`.
+
+## Sirenes RF no status e no HA
+
+Cadastro: `0x0B50` bytes `23:25` (sirenes 1–16). O cliente monta uma lista `sirens` no `PanelStatus` só para números cadastrados.
+
+Diagnóstico (attrs do `binary_sensor` por sirene RF):
+
+| Campo | Offset (0-based) | Nota |
+|-------|------------------|------|
+| `fault` | `83–84` | Faixa dedicada no SDK. Pendente captura com falha real. |
+| `tamper` | `99–100` | Hipótese (após 2 bytes de teclado em `97–98`). Pendente captura. |
+| `low_battery` | `115–116` | Hipótese (após 2 bytes de teclado em `113–114`). Pendente captura. |
+
+Validar com a tool antes de confiar nos bits de trouble:
+
+```bash
+python3 amt8000_tool.py --host <IP> devices
+python3 amt8000_tool.py --host <IP> status
+python3 amt8000_tool.py --host <IP> raw-status
+```
+
+Não há controle individual por sirene RF neste projeto.
 
 ## PGM — `0x45AF`
 

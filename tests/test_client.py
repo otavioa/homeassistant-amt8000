@@ -20,6 +20,7 @@ client_mod = _load_client_module()
 Amt8000Client = client_mod.Amt8000Client
 BypassError = client_mod.BypassError
 PgmError = client_mod.PgmError
+SirenError = client_mod.SirenError
 
 
 class _Writer:
@@ -229,6 +230,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(writer.packets[0][6:8], bytes([0x0B, 0x4A]))
         self.assertEqual(writer.packets[1][6:8], bytes([0x0B, 0x50]))
         self.assertEqual([(pgm.index, pgm.on) for pgm in status.pgms], [(0, True)])
+        self.assertEqual([s.number for s in status.sirens], [1])
         self.assertTrue(client._disconnected)
 
     def test_get_status_nack_on_devices_yields_no_pgms(self) -> None:
@@ -246,3 +248,58 @@ class ClientTests(unittest.TestCase):
         status = asyncio.run(client.get_status())
 
         self.assertEqual(status.pgms, [])
+        self.assertEqual(status.sirens, [])
+
+    def test_recorded_siren_numbers_from_live_capture(self) -> None:
+        payload = bytes.fromhex(
+            "02 00 00 00 00 00 00 00 00 00 00 00 00 FF 00 00 00 00 00 00 00 00 00 01 00 10 00 00 00"
+        )
+        self.assertEqual(Amt8000Client.recorded_siren_numbers(payload), [1])
+
+    def test_recorded_siren_numbers_short_payload_is_empty(self) -> None:
+        self.assertEqual(Amt8000Client.recorded_siren_numbers(b"\x00" * 23), [])
+
+    def test_parse_sirens_trouble_bits(self) -> None:
+        payload = bytearray(143)
+        payload[83] = 0x01
+        payload[99] = 0x01
+        payload[115] = 0x01
+        siren = Amt8000Client._parse_sirens(bytes(payload), [1])[0]
+        self.assertEqual(siren.number, 1)
+        self.assertTrue(siren.fault)
+        self.assertTrue(siren.tamper)
+        self.assertTrue(siren.low_battery)
+
+    def test_siren_off_sends_command(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        writer = self._stub_command_io(client)
+
+        asyncio.run(client.siren_off())
+
+        self.assertEqual(writer.packets[0][6:8], bytes([0x40, 0x19]))
+        self.assertTrue(client._disconnected)
+
+    def test_panic_sends_type_byte(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        writer = self._stub_command_io(client)
+
+        asyncio.run(client.panic("medical"))
+
+        self.assertEqual(writer.packets[0][6:9], bytes([0x40, 0x1A, 0x03]))
+        self.assertTrue(client._disconnected)
+
+    def test_panic_rejects_invalid_type(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        with self.assertRaises(SirenError):
+            asyncio.run(client.panic("unknown"))
+
+    def test_siren_nack_raises(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        self._stub_command_io(client, bytes([0, 0, 0, 0, 0, 3, 0xF0, 0xFD, 0xE6]))
+
+        with self.assertRaises(SirenError):
+            asyncio.run(client.siren_off())
+
+
+if __name__ == "__main__":
+    unittest.main()

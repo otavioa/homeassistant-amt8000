@@ -1,4 +1,4 @@
-"""Event entity — fires when the siren goes live."""
+"""Event entity — fires when a partition starts firing (alarm triggered)."""
 from __future__ import annotations
 
 from homeassistant.components.event import EventEntity
@@ -28,19 +28,19 @@ class Amt8000AlarmEvent(CoordinatorEntity[Amt8000Coordinator], EventEntity):
         self._attr_unique_id = f"{entry.entry_id}_alarm_event"
         self._attr_name = "Alarm"
         self._attr_device_info = _device_info(entry)
-        self._prev_siren = False
+        self._prev_firing = False
 
     @callback
     def _handle_coordinator_update(self) -> None:
         if self.coordinator.data:
-            siren = self.coordinator.data.siren_live
-            if siren and not self._prev_siren:
-                firing = [
-                    p.index
-                    for p in self.coordinator.data.partitions
-                    if p.firing
-                ]
-                self._trigger_event("alarm_triggered", {"partitions_firing": firing})
+            firing_indexes = [
+                p.index for p in self.coordinator.data.partitions if p.firing
+            ]
+            firing = bool(firing_indexes)
+            if firing and not self._prev_firing:
+                self._trigger_event(
+                    "alarm_triggered", {"partitions_firing": firing_indexes}
+                )
                 self.async_write_ha_state()
-            self._prev_siren = siren
+            self._prev_firing = firing
         super()._handle_coordinator_update()

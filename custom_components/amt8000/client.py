@@ -20,6 +20,8 @@ _CMD_DEVICES    = [0x0B, 0x50]
 _CMD_ARM        = [0x40, 0x1E]
 _CMD_BYPASS     = [0x40, 0x1F]
 _CMD_PGM        = [0x45, 0xAF]
+_CMD_PANIC      = [0x40, 0x1A]
+_CMD_SIREN_OFF  = [0x40, 0x19]
 _CMD_DISCONNECT = [0xF0, 0xF1]
 
 _SUBCMD_DISARM = 0x00
@@ -27,12 +29,25 @@ _SUBCMD_ARM    = 0x01
 
 ALL_PARTITIONS = 0xFF
 MAX_PGMS = 16
+MAX_SIRENS = 16
 # On/off is status payload[137:139] (16 bits). Existence comes from 0x0B50.
 _PGM_ON_OFFSET = 137
 _PGM_COMM_FAIL_OFFSET = 87
 _PGM_TAMPER_OFFSET = 103
 _PGM_LOW_BATTERY_OFFSET = 119
+# RF siren trouble masks in 0x0B4A (SDK; fault range is dedicated 83–84).
+# Tamper/battery: 2 bytes keypads + 2 sirens + 2 repeaters in 97–102 / 113–118.
+_SIREN_FAULT_OFFSET = 83
+_SIREN_TAMPER_OFFSET = 99
+_SIREN_LOW_BATTERY_OFFSET = 115
 _NACK = 0xF0FD
+
+PANIC_TYPES = {
+    "silent": 0,
+    "audible": 1,
+    "fire": 2,
+    "medical": 3,
+}
 
 _STATES = {0: "DISARMED", 1: "PARTIAL", 3: "ARMED"}
 _BATTERY = {1: "dead", 2: "low", 3: "middle", 4: "full"}
@@ -56,6 +71,10 @@ class BypassError(Exception):
 
 class PgmError(Exception):
     """Raised when the panel rejects a PGM command."""
+
+
+class SirenError(Exception):
+    """Raised when the panel rejects a siren or panic command."""
 
 
 @dataclasses.dataclass
@@ -94,6 +113,17 @@ class Pgm:
 
 
 @dataclasses.dataclass
+class Siren:
+    """Recorded RF siren (1-based number). Diagnostics from 0x0B4A SDK masks."""
+
+    number: int
+    enabled: bool
+    fault: bool
+    tamper: bool
+    low_battery: bool
+
+
+@dataclasses.dataclass
 class PanelStatus:
     model: int
     version: str
@@ -106,6 +136,7 @@ class PanelStatus:
     partitions: list[Partition]
     zones: list[Zone]
     pgms: list[Pgm]
+    sirens: list[Siren]
 
 
 class Amt8000Client:
@@ -199,10 +230,12 @@ class Amt8000Client:
             await self._disconnect(writer)
 
         payload = Amt8000Client._response_payload(status_resp)
-        pgm_indexes = Amt8000Client.recorded_pgm_indexes(
-            Amt8000Client._response_payload(devices_resp, expected=_CMD_DEVICES)
+        devices_payload = Amt8000Client._response_payload(
+            devices_resp, expected=_CMD_DEVICES
         )
-        return self._parse_status(payload, pgm_indexes)
+        pgm_indexes = Amt8000Client.recorded_pgm_indexes(devices_payload)
+        siren_numbers = Amt8000Client.recorded_siren_numbers(devices_payload)
+        return self._parse_status(payload, pgm_indexes, siren_numbers)
 
     async def arm_partition(self, partition_idx: int) -> None:
         await self._arm_cmd(partition_idx, _SUBCMD_ARM)
@@ -259,6 +292,35 @@ class Amt8000Client:
         finally:
             await self._disconnect(writer)
 
+    async def siren_off(self) -> None:
+        """Silence the active siren while leaving arm state unchanged."""
+        await self._siren_command(_CMD_SIREN_OFF)
+
+    async def panic(self, panic_type: str = "audible") -> None:
+        """Trigger a panel panic. panic_type: silent|audible|fire|medical."""
+        if panic_type not in PANIC_TYPES:
+            raise SirenError(f"Invalid panic type: {panic_type}")
+        await self._siren_command(_CMD_PANIC, [PANIC_TYPES[panic_type]])
+
+    async def _siren_command(
+        self, cmd: list[int], payload: list[int] | None = None
+    ) -> None:
+        reader, writer = await self._connect_and_auth()
+        try:
+            writer.write(self._packet(cmd, payload))
+            await writer.drain()
+            response = await self._read_frame(reader)
+            if len(response) < 8:
+                raise SirenError("Invalid siren/panic response")
+
+            response_cmd = int.from_bytes(response[6:8], "big")
+            if response_cmd == _NACK:
+                error_code = response[8] if len(response) > 8 else 0
+                _LOGGER.debug("Siren/panic NACK: 0x%02X", error_code)
+                raise SirenError("Siren/panic command rejected")
+        finally:
+            await self._disconnect(writer)
+
     async def _arm_cmd(self, partition_idx: int, subcmd: int) -> None:
         reader, writer = await self._connect_and_auth()
         try:
@@ -312,8 +374,22 @@ class Amt8000Client:
         return indexes
 
     @staticmethod
+    def recorded_siren_numbers(payload: bytes) -> list[int]:
+        """1-based RF siren numbers marked recorded in 0x0B50 bytes 23:25."""
+        if len(payload) < 24:
+            return []
+        numbers: list[int] = []
+        limit = min(MAX_SIRENS, (len(payload) - 23) * 8)
+        for index in range(limit):
+            if Amt8000Client._mask_bit(payload, 23, index):
+                numbers.append(index + 1)
+        return numbers
+
+    @staticmethod
     def _parse_status(
-        payload: bytes, pgm_indexes: list[int] | None = None
+        payload: bytes,
+        pgm_indexes: list[int] | None = None,
+        siren_numbers: list[int] | None = None,
     ) -> PanelStatus:
         if len(payload) < 143:
             raise CannotConnect(f"Truncated status payload: {len(payload)} bytes (expected 143)")
@@ -360,6 +436,7 @@ class Amt8000Client:
             partitions=partitions,
             zones=zones,
             pgms=Amt8000Client._parse_pgms(payload, pgm_indexes or []),
+            sirens=Amt8000Client._parse_sirens(payload, siren_numbers or []),
         )
 
     @staticmethod
@@ -385,3 +462,28 @@ class Amt8000Client:
             for i in indexes
             if 0 <= i < MAX_PGMS
         ]
+
+    @staticmethod
+    def _parse_sirens(payload: bytes, numbers: list[int]) -> list[Siren]:
+        """Build recorded RF sirens; trouble bits from 0x0B4A SDK masks."""
+        sirens: list[Siren] = []
+        for number in numbers:
+            if not 1 <= number <= MAX_SIRENS:
+                continue
+            index = number - 1
+            sirens.append(
+                Siren(
+                    number=number,
+                    enabled=True,
+                    fault=Amt8000Client._mask_bit(
+                        payload, _SIREN_FAULT_OFFSET, index
+                    ),
+                    tamper=Amt8000Client._mask_bit(
+                        payload, _SIREN_TAMPER_OFFSET, index
+                    ),
+                    low_battery=Amt8000Client._mask_bit(
+                        payload, _SIREN_LOW_BATTERY_OFFSET, index
+                    ),
+                )
+            )
+        return sirens
