@@ -248,6 +248,10 @@ Decodificado: keyfob 1, zonas 1–8, sirene 1, PGM 1. Sem teclado nem repetidor.
 
 A tool consulta com `devices`. O cliente HA envia `0x0B50` na mesma sessão TCP do `0x0B4A` (`get_status`). Com NACK ou payload curto, a lista de PGM fica vazia — não inventa PGM 1 e 2. Switch no HA só para PGM com bit cadastrado.
 
+## Sinal RF por zona — não disponível nesta AMT
+
+O SDK V2 tem `NIVEL_DE_SINAL_DISP_SF` (`0x0B73`, 64 bytes, 1 por zona, 0–10). No firmware 3.2.8 a central responde 1 byte `0xEA` (checksum do pedido) — comando não implementado. `STATUS_GERAL_RF` (`0x0B40`) responde 3 bytes (`02 00 00` na captura local); é resumo de flags, não RSSI por zona. O status `0x0B4A` também não traz nível de sinal. O Guardian lê 0–10 só no ISECNet V1 `0x5D` (AMT 2018 E Smart / 1000 Smart) — não enviar na porta 9009 desta AMT 8000. Esta integração não expõe sinal RF.
+
 ## Arme e desarme — `0x401E`
 
 Payload:
@@ -369,7 +373,7 @@ O projeto de referência possui uma tabela de códigos de modelo diferente, asso
 
 ## Referências
 
-- SDK Intelbras V2 — `docs/SDKCentraisDeAlarmeIntelbras-v1.0.1/SDKCentraisDeAlarmeIntelbras-v1.0.1.xlsx` (envelope ISECNet V2; mapa `0x0B4A` / `0x0B50` cruzado com o comando `STATUS_COMPLETO`)
+- SDK Intelbras V2 — `docs/SDKCentraisDeAlarmeIntelbras-v1.0.1/SDKCentraisDeAlarmeIntelbras-v1.0.1.xlsx` (envelope ISECNet V2; mapa `0x0B4A` / `0x0B50`)
 - [`bobaoapae/guardian-api-intelbras`](https://github.com/bobaoapae/guardian-api-intelbras) — projeto de referência original
 - [`caarlos0/homekit-amt8000`](https://github.com/caarlos0/homekit-amt8000) — implementação Go referenciada pelo cliente original
 - [`merencia/amt8000-hass-integration`](https://github.com/merencia/amt8000-hass-integration) — cliente Python referenciado pelo projeto original
