@@ -1,6 +1,6 @@
 {
   "domain": "amt8000",
-  "name": "Intelbras AMT 8000 2.0",
+  "name": "Intelbras AMT 8000 HA Control",
   "codeowners": ["@fdaneluzzi", "@otavioa"],
   "config_flow": true,
   "documentation": "https://github.com/otavioa/homeassistant-amt8000",
