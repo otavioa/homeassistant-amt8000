@@ -63,6 +63,8 @@ python3 amt8000_tool.py --host 192.168.1.100 arm --partition 1 --mode stay
 python3 amt8000_tool.py --host 192.168.1.100 watch --interval 5
 ```
 
+Stay (`--mode stay`) arms only zones programmed as perimeter on the panel. If the partition has none, the panel returns NACK `0x36` (`ERRO_PARTICAO_SEM_ZONAS_STAY`) and does not change state. Configure at least one stay zone first. If a stay zone is open, the panel returns NACK `0x27` (`ERRO_ZONAS_ABERTAS`). Close or bypass that zone and retry. Details in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+
 To arm with open zones, bypass the zones first and then send a normal arm:
 
 ```bash
@@ -90,8 +92,8 @@ Every operation prints the request and the response in detail, including payload
 ## Entities created
 
 ```text
-Panel                          Arm / disarm the whole panel (0xFF). Alarm event. Open-zone bypass policy.
-  Partitions                   One alarm panel each. Arm away / disarm.
+Panel                          Arm away, arm night (stay 0x02) or disarm the whole panel (0xFF). Alarm event. Open-zone bypass policy.
+  Partitions                   One alarm panel each. Arm away, arm night (stay 0x02) or disarm.
   Zones                        Open/closed sensor. Bypass switch. Violated, tamper, low battery.
   PGMs                         On/off switch per recorded output. Tamper, low battery, comm fail.
   Sirens                       Global siren: sounding, silence, panic. One diagnostic sensor per RF siren: fault, tamper, low battery.
@@ -99,9 +101,9 @@ Panel                          Arm / disarm the whole panel (0xFF). Alarm event.
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `alarm_control_panel.amt8000_partition_N` | Alarm panel | One per configured partition. Arm Away / Disarm. |
-| `alarm_control_panel.amt8000_panel` | Alarm panel | Arms or disarms the whole panel (`0xFF`). |
-| `binary_sensor.amt8000_zone_N` | Binary sensor | Open / closed. Extra attrs: violated, bypassed, tamper, low_battery. |
+| `alarm_control_panel.amt8000_partition_N` | Alarm panel | One per configured partition. Arms away (`0x01`), arms night/stay (`0x02`) or disarms that partition. |
+| `alarm_control_panel.amt8000_panel` | Alarm panel | Arms away (`0x01`), arms night/stay (`0x02`) or disarms the whole panel (`0xFF`). |
+| `binary_sensor.amt8000_zone_N` | Binary sensor | Open / closed. Extra attrs: violated, bypassed, tamper, low_battery. Night/stay zone (Guardian moon) is not in status `0x0B4A`; see [`docs/PROTOCOL.md`](docs/PROTOCOL.md). |
 | `switch.amt8000_zone_N_bypass` | Switch | On = zone bypassed (`0x01`). Off = zone active again (`0x00`, `--clear`). Bypass was also confirmed with the panel armed. |
 | `switch.amt8000_pgm_N` | Switch | On/off for each recorded programmable output (`0x0B50`). State from `payload[137:139]`; control `0x45AF`. Extra attrs: `index`, `number`, `tamper`, `low_battery`, `comm_fail`. After upgrade, delete a leftover PGM 2 entity in the UI if it stays unavailable. |
 | `siren.amt8000_siren` | Siren | On while panel siren is sounding (`siren_live`). `turn_off` silences (`0x4019`). `turn_on` with tone triggers panic (`silent` / `audible` / `fire` / `medical`). |
@@ -117,7 +119,7 @@ The former `binary_sensor` for the global siren was replaced by `siren.amt8000_s
 
 The AMT 8000 uses **ISECNet v2** (TCP 9009), which is distinct from the `0xe7` protocol used by lower-end AMT models (1016/2018 NET).
 
-Partition index 0 in the protocol is a read-only AND-aggregate (armed only when all real partitions are armed) and is intentionally excluded from HA entities. User partitions start at protocol index 1. The **Panel** entity uses the protocol command `0xFF` to arm or disarm all user partitions.
+Partition index 0 in the protocol is a read-only AND-aggregate (armed only when all real partitions are armed) and is intentionally excluded from HA entities. User partitions start at protocol index 1. Each **Partition** entity arms away (`0x01`), arms night/stay (`0x02`) or disarms (`0x00`) that partition. The **Panel** entity uses `0xFF` for the same three commands on every user partition. Night on the Panel fails if any partition has no stay zone.
 
 Full protocol documentation in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 

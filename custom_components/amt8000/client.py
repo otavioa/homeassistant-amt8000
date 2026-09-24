@@ -26,6 +26,7 @@ _CMD_DISCONNECT = [0xF0, 0xF1]
 
 _SUBCMD_DISARM = 0x00
 _SUBCMD_ARM    = 0x01
+_SUBCMD_STAY   = 0x02
 
 ALL_PARTITIONS = 0xFF
 MAX_PGMS = 16
@@ -63,6 +64,10 @@ class InvalidAuth(Exception):
 
 class OpenZones(Exception):
     """Raised when arm is blocked because zones are open."""
+
+
+class NoStayZones(Exception):
+    """Stay arm rejected: the partition has no stay zones configured (NACK 0x36)."""
 
 
 class BypassError(Exception):
@@ -240,6 +245,10 @@ class Amt8000Client:
     async def arm_partition(self, partition_idx: int) -> None:
         await self._arm_cmd(partition_idx, _SUBCMD_ARM)
 
+    async def arm_partition_stay(self, partition_idx: int) -> None:
+        """Arm stay (night): perimeter armed, interior zones left open. Operation 0x02."""
+        await self._arm_cmd(partition_idx, _SUBCMD_STAY)
+
     async def disarm_partition(self, partition_idx: int) -> None:
         await self._arm_cmd(partition_idx, _SUBCMD_DISARM)
 
@@ -326,11 +335,16 @@ class Amt8000Client:
         try:
             writer.write(self._packet(_CMD_ARM, [partition_idx, subcmd]))
             await writer.drain()
-            if subcmd == _SUBCMD_ARM:
+            if subcmd in (_SUBCMD_ARM, _SUBCMD_STAY):
                 try:
                     resp = await self._read_frame(reader)
-                    body_start = 8
-                    if len(resp) > body_start and resp[body_start] == 0xF0:
+                    if len(resp) >= 8 and int.from_bytes(resp[6:8], "big") == _NACK:
+                        error_code = resp[8] if len(resp) > 8 else 0
+                        if subcmd == _SUBCMD_STAY and error_code == 0x36:
+                            raise NoStayZones("Partition has no stay zones")
+                        if error_code == 0x27:
+                            raise OpenZones("Cannot arm: zones are open")
+                    elif len(resp) > 8 and resp[8] == 0xF0:
                         raise OpenZones("Cannot arm: zones are open")
                 except CannotConnect:
                     pass  # panel may close before responding; assume success

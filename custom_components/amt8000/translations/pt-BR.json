@@ -1,4 +1,20 @@
 {
+  "entity": {
+    "alarm_control_panel": {
+      "panel": {
+        "state": {
+          "armed_away": "Armado",
+          "armed_night": "Noturno"
+        }
+      },
+      "partition": {
+        "state": {
+          "armed_away": "Armado",
+          "armed_night": "Noturno"
+        }
+      }
+    }
+  },
   "options": {
     "step": {
       "init": {
