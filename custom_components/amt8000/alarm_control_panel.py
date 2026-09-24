@@ -272,10 +272,7 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
 
 
 class Amt8000Panel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPanelEntity):
-    """Arms away, arms night (stay) and disarms every user partition (0xFF).
-
-    A future Panel Status sensor uses the same device (_device_info).
-    """
+    """Arms away, arms night (stay) and disarms every user partition (0xFF)."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "panel"
@@ -314,6 +311,18 @@ class Amt8000Panel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPanelEntit
         if any(p.armed or p.stay for p in parts):
             return AlarmControlPanelState.ARMED_HOME
         return AlarmControlPanelState.DISARMED
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        status = self.coordinator.data
+        if status is None:
+            return {}
+        return {
+            "battery": status.battery,
+            "tamper": status.tamper,
+            "model": f"0x{status.model:02X}",
+            "firmware": status.version,
+        }
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         await self._arm(stay=False)

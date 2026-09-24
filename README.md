@@ -102,7 +102,7 @@ Panel                          Arm away, arm night (stay 0x02) or disarm the who
 | Entity | Type | Description |
 |--------|------|-------------|
 | `alarm_control_panel.amt8000_partition_N` | Alarm panel | One per configured partition. Arms away (`0x01`), arms night/stay (`0x02`) or disarms that partition. |
-| `alarm_control_panel.amt8000_panel` | Alarm panel | Arms away (`0x01`), arms night/stay (`0x02`) or disarms the whole panel (`0xFF`). |
+| `alarm_control_panel.amt8000_panel` | Alarm panel | Arms away (`0x01`), arms night/stay (`0x02`) or disarms the whole panel (`0xFF`). Extra attrs: `battery` (`payload[134]`: dead, low, middle, full), `tamper` (`payload[71]` bit 1), `model`, `firmware`. Delete a leftover Battery sensor in the UI if it stays unavailable. |
 | `binary_sensor.amt8000_zone_N` | Binary sensor | Open / closed. Extra attrs: violated, bypassed, tamper, low_battery. Night/stay zone (Guardian moon) is not in status `0x0B4A`; see [`docs/PROTOCOL.md`](docs/PROTOCOL.md). |
 | `switch.amt8000_zone_N_bypass` | Switch | On = zone bypassed (`0x01`). Off = zone active again (`0x00`, `--clear`). Bypass was also confirmed with the panel armed. |
 | `switch.amt8000_pgm_N` | Switch | On/off for each recorded programmable output (`0x0B50`). State from `payload[137:139]`; control `0x45AF`. Extra attrs: `index`, `number`, `tamper`, `low_battery`, `comm_fail`. After upgrade, delete a leftover PGM 2 entity in the UI if it stays unavailable. |
