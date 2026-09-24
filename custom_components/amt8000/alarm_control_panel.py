@@ -16,7 +16,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import ALL_PARTITIONS, BypassError, OpenZones
+from .client import ALL_PARTITIONS, BypassError, NoStayZones, OpenZones
 from .const import AGGREGATE_PARTITION_IDX, DOMAIN
 from .coordinator import Amt8000Coordinator
 
@@ -33,15 +33,46 @@ async def _notify_open_zones(
     partition_idx: int,
     zones: list,
     message: str,
+    *,
+    title: str = "Zonas abertas",
 ) -> None:
     zone_names = ", ".join(f"Zona {zone.number}" for zone in zones)
     await entity.hass.services.async_call(
         PERSISTENT_NOTIFICATION_DOMAIN,
         "create",
         {
-            "title": "Zonas abertas",
+            "title": title,
             "message": f"{message}\n\n{zone_names}",
             "notification_id": f"{DOMAIN}_open_zones_{entity._entry.entry_id}_{partition_idx}",
+        },
+    )
+
+
+async def _notify_no_stay_zones(
+    entity: CoordinatorEntity[Amt8000Coordinator], partition_idx: int
+) -> None:
+    await entity.hass.services.async_call(
+        PERSISTENT_NOTIFICATION_DOMAIN,
+        "create",
+        {
+            "title": "Modo noturno",
+            "message": (
+                "O modo noturno foi recusado. Nenhuma zona da partição está "
+                "configurada como zona stay (perímetro)."
+            ),
+            "notification_id": f"{DOMAIN}_no_stay_zones_{entity._entry.entry_id}_{partition_idx}",
+        },
+    )
+
+
+async def _dismiss_no_stay_notification(
+    entity: CoordinatorEntity[Amt8000Coordinator], partition_idx: int
+) -> None:
+    await entity.hass.services.async_call(
+        PERSISTENT_NOTIFICATION_DOMAIN,
+        "dismiss",
+        {
+            "notification_id": f"{DOMAIN}_no_stay_zones_{entity._entry.entry_id}_{partition_idx}",
         },
     )
 
@@ -62,29 +93,36 @@ async def _arm_with_open_zone_policy(
     entity: CoordinatorEntity[Amt8000Coordinator],
     partition_idx: int,
     zones: list | None = None,
+    *,
+    stay: bool = False,
 ) -> None:
     zones = _open_zones(entity.coordinator) if zones is None else zones
+    title = "Modo noturno" if stay else "Zonas abertas"
     if not zones:
-        await _notify_open_zones(
-            entity,
-            partition_idx,
-            [],
-            "A central recusou o arme por zona aberta, mas o último status não as identificou.",
+        message = (
+            "O modo noturno foi recusado. Há zona aberta no perímetro, mas o último status não as identificou."
+            if stay
+            else "A central recusou o arme por zona aberta, mas o último status não as identificou."
         )
+        await _notify_open_zones(entity, partition_idx, [], message, title=title)
         return
 
     if not entity.coordinator.allow_open_zone_bypass:
-        await _notify_open_zones(
-            entity,
-            partition_idx,
-            zones,
-            "O arme foi bloqueado. Ative 'Allow Open Zone Bypass' para permitir o bypass automático.",
+        message = (
+            "O modo noturno foi recusado. Há zona aberta no perímetro. "
+            "Ative 'Allow Open Zone Bypass' para permitir o bypass automático."
+            if stay
+            else "O arme foi bloqueado. Ative 'Allow Open Zone Bypass' para permitir o bypass automático."
         )
+        await _notify_open_zones(entity, partition_idx, zones, message, title=title)
         return
 
     try:
         await entity.coordinator.client.bypass_zones([zone.number - 1 for zone in zones])
-        await entity.coordinator.client.arm_partition(partition_idx)
+        if stay:
+            await entity.coordinator.client.arm_partition_stay(partition_idx)
+        else:
+            await entity.coordinator.client.arm_partition(partition_idx)
     except BypassError as exc:
         _LOGGER.warning("Automatic open-zone bypass was rejected: %s", exc)
         await _notify_open_zones(
@@ -92,16 +130,21 @@ async def _arm_with_open_zone_policy(
             partition_idx,
             zones,
             "O bypass automático foi recusado pela central.",
+            title=title,
         )
         return
     except OpenZones:
         _LOGGER.warning("The panel still reports open zones after automatic bypass")
-        await _notify_open_zones(
-            entity,
-            partition_idx,
-            zones,
-            "A central ainda identificou zonas abertas após o bypass.",
+        message = (
+            "O modo noturno foi recusado. A central ainda identificou zonas abertas após o bypass."
+            if stay
+            else "A central ainda identificou zonas abertas após o bypass."
         )
+        await _notify_open_zones(entity, partition_idx, zones, message, title=title)
+        return
+    except NoStayZones:
+        _LOGGER.warning("Night arm rejected: partition has no stay zones")
+        await _notify_no_stay_zones(entity, partition_idx)
         return
     except Exception:
         _LOGGER.exception("Unexpected error during automatic open-zone bypass")
@@ -110,10 +153,13 @@ async def _arm_with_open_zone_policy(
             partition_idx,
             zones,
             "Não foi possível concluir o bypass automático. Consulte os logs.",
+            title=title,
         )
         return
 
     await _dismiss_open_zone_notification(entity, partition_idx)
+    if stay:
+        await _dismiss_no_stay_notification(entity, partition_idx)
     await entity.coordinator.async_request_refresh()
 
 
@@ -126,7 +172,7 @@ async def async_setup_entry(
         for p in coordinator.data.partitions
         if p.index != AGGREGATE_PARTITION_IDX
     ]
-    entities.append(Amt8000MasterPanel(coordinator, entry))
+    entities.append(Amt8000Panel(coordinator, entry))
     async_add_entities(entities)
 
 
@@ -140,8 +186,14 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
 
 
 class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPanelEntity):
+    """Arms away, arms night (stay) and disarms one user partition."""
+
     _attr_has_entity_name = True
-    _attr_supported_features = AlarmControlPanelEntityFeature.ARM_AWAY
+    _attr_translation_key = "partition"
+    _attr_supported_features = (
+        AlarmControlPanelEntityFeature.ARM_AWAY
+        | AlarmControlPanelEntityFeature.ARM_NIGHT
+    )
     _attr_code_arm_required = False
     _attr_code_disarm_required = False
 
@@ -171,23 +223,47 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
             return None
         if p.firing:
             return AlarmControlPanelState.TRIGGERED
+        if p.stay:
+            return AlarmControlPanelState.ARMED_NIGHT
         if p.armed:
             return AlarmControlPanelState.ARMED_AWAY
         return AlarmControlPanelState.DISARMED
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
+        await self._arm(stay=False)
+
+    async def async_alarm_arm_night(self, code: str | None = None) -> None:
+        await self._arm(stay=True)
+
+    async def _arm(self, stay: bool) -> None:
         zones = _open_zones(self.coordinator)
         if zones:
-            await _arm_with_open_zone_policy(self, self._partition_idx, zones)
+            await _arm_with_open_zone_policy(self, self._partition_idx, zones, stay=stay)
             return
 
         try:
-            await self.coordinator.client.arm_partition(self._partition_idx)
+            if stay:
+                await self.coordinator.client.arm_partition_stay(self._partition_idx)
+            else:
+                await self.coordinator.client.arm_partition(self._partition_idx)
         except OpenZones:
-            _LOGGER.warning("Partition %d: arm blocked — open zones", self._partition_idx)
+            _LOGGER.warning(
+                "Partition %d: %s blocked — open zones",
+                self._partition_idx,
+                "night arm" if stay else "arm",
+            )
             await self.coordinator.async_request_refresh()
-            await _arm_with_open_zone_policy(self, self._partition_idx)
+            await _arm_with_open_zone_policy(self, self._partition_idx, stay=stay)
             return
+        except NoStayZones:
+            _LOGGER.warning(
+                "Partition %d: night arm rejected — no stay zones", self._partition_idx
+            )
+            await _notify_no_stay_zones(self, self._partition_idx)
+            await self.coordinator.async_request_refresh()
+            return
+        if stay:
+            await _dismiss_no_stay_notification(self, self._partition_idx)
         await self.coordinator.async_request_refresh()
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
@@ -195,18 +271,25 @@ class Amt8000PartitionPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlP
         await self.coordinator.async_request_refresh()
 
 
-class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPanelEntity):
-    """Virtual panel that arms/disarms all user partitions at once."""
+class Amt8000Panel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPanelEntity):
+    """Arms away, arms night (stay) and disarms every user partition (0xFF).
+
+    A future Panel Status sensor uses the same device (_device_info).
+    """
 
     _attr_has_entity_name = True
-    _attr_supported_features = AlarmControlPanelEntityFeature.ARM_AWAY
+    _attr_translation_key = "panel"
+    _attr_supported_features = (
+        AlarmControlPanelEntityFeature.ARM_AWAY
+        | AlarmControlPanelEntityFeature.ARM_NIGHT
+    )
     _attr_code_arm_required = False
     _attr_code_disarm_required = False
 
     def __init__(self, coordinator: Amt8000Coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_all"
-        self._attr_name = "All Partitions"
+        self._attr_unique_id = f"{entry.entry_id}_panel"
+        self._attr_name = "Panel"
         self._attr_device_info = _device_info(entry)
 
     def _real_partitions(self):
@@ -224,25 +307,43 @@ class Amt8000MasterPanel(CoordinatorEntity[Amt8000Coordinator], AlarmControlPane
             return None
         if any(p.firing for p in parts):
             return AlarmControlPanelState.TRIGGERED
-        if all(p.armed for p in parts):
+        if all(p.stay for p in parts):
+            return AlarmControlPanelState.ARMED_NIGHT
+        if all(p.armed and not p.stay for p in parts):
             return AlarmControlPanelState.ARMED_AWAY
-        if any(p.armed for p in parts):
+        if any(p.armed or p.stay for p in parts):
             return AlarmControlPanelState.ARMED_HOME
         return AlarmControlPanelState.DISARMED
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
+        await self._arm(stay=False)
+
+    async def async_alarm_arm_night(self, code: str | None = None) -> None:
+        await self._arm(stay=True)
+
+    async def _arm(self, stay: bool) -> None:
         zones = _open_zones(self.coordinator)
         if zones:
-            await _arm_with_open_zone_policy(self, ALL_PARTITIONS, zones)
+            await _arm_with_open_zone_policy(self, ALL_PARTITIONS, zones, stay=stay)
             return
 
         try:
-            await self.coordinator.client.arm_partition(ALL_PARTITIONS)
+            if stay:
+                await self.coordinator.client.arm_partition_stay(ALL_PARTITIONS)
+            else:
+                await self.coordinator.client.arm_partition(ALL_PARTITIONS)
         except OpenZones:
-            _LOGGER.warning("Master arm blocked — open zones")
+            _LOGGER.warning("Panel %s blocked — open zones", "night arm" if stay else "arm")
             await self.coordinator.async_request_refresh()
-            await _arm_with_open_zone_policy(self, ALL_PARTITIONS)
+            await _arm_with_open_zone_policy(self, ALL_PARTITIONS, stay=stay)
             return
+        except NoStayZones:
+            _LOGGER.warning("Panel night arm rejected: no stay zones")
+            await _notify_no_stay_zones(self, ALL_PARTITIONS)
+            await self.coordinator.async_request_refresh()
+            return
+        if stay:
+            await _dismiss_no_stay_notification(self, ALL_PARTITIONS)
         await self.coordinator.async_request_refresh()
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:

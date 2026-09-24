@@ -19,6 +19,8 @@ def _load_client_module():
 client_mod = _load_client_module()
 Amt8000Client = client_mod.Amt8000Client
 BypassError = client_mod.BypassError
+NoStayZones = client_mod.NoStayZones
+OpenZones = client_mod.OpenZones
 PgmError = client_mod.PgmError
 SirenError = client_mod.SirenError
 
@@ -299,6 +301,56 @@ class ClientTests(unittest.TestCase):
 
         with self.assertRaises(SirenError):
             asyncio.run(client.siren_off())
+
+    def test_arm_stay_sends_panel_subcommand(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        writer = self._stub_command_io(client)
+
+        asyncio.run(client.arm_partition_stay(0xFF))
+
+        self.assertEqual(writer.packets[0][6:10], bytes([0x40, 0x1E, 0xFF, 0x02]))
+        self.assertTrue(client._disconnected)
+
+    def test_arm_stay_sends_partition_subcommand(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        writer = self._stub_command_io(client)
+
+        asyncio.run(client.arm_partition_stay(1))
+
+        self.assertEqual(writer.packets[0][6:10], bytes([0x40, 0x1E, 0x01, 0x02]))
+
+    def test_arm_stay_without_stay_zones_raises(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        self._stub_command_io(
+            client, bytes([0x8F, 0xE0, 0x00, 0x00, 0x00, 0x03, 0xF0, 0xFD, 0x36, 0xA8])
+        )
+
+        with self.assertRaises(NoStayZones):
+            asyncio.run(client.arm_partition_stay(0xFF))
+
+    def test_arm_away_nack_36_is_not_no_stay_zones(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        self._stub_command_io(
+            client, bytes([0x8F, 0xE0, 0x00, 0x00, 0x00, 0x03, 0xF0, 0xFD, 0x36, 0xA8])
+        )
+
+        asyncio.run(client.arm_partition(0xFF))
+
+    def test_arm_stay_nack_open_zones_raises(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        self._stub_command_io(
+            client, bytes([0x8F, 0xE0, 0x00, 0x00, 0x00, 0x03, 0xF0, 0xFD, 0x27, 0xB9])
+        )
+
+        with self.assertRaises(OpenZones):
+            asyncio.run(client.arm_partition_stay(0xFF))
+
+    def test_arm_stay_open_zones_raises(self) -> None:
+        client = Amt8000Client("127.0.0.1", 9009, "1234")
+        self._stub_command_io(client, bytes([0, 0, 0, 0, 0, 3, 0x40, 0x1E, 0xF0]))
+
+        with self.assertRaises(OpenZones):
+            asyncio.run(client.arm_partition_stay(0xFF))
 
 
 if __name__ == "__main__":

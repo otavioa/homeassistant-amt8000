@@ -1,4 +1,20 @@
 {
+  "entity": {
+    "alarm_control_panel": {
+      "panel": {
+        "state": {
+          "armed_away": "Armed",
+          "armed_night": "Night"
+        }
+      },
+      "partition": {
+        "state": {
+          "armed_away": "Armed",
+          "armed_night": "Night"
+        }
+      }
+    }
+  },
   "options": {
     "step": {
       "init": {

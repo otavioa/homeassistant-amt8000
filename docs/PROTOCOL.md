@@ -216,6 +216,23 @@ Cada byte em `payload[21:38]` (SDK: partições 0–16) usa:
 
 O índice `0` é um agregado somente leitura: seu bit de arme representa o `AND` das partições reais. As partições configuráveis começam no índice `1`.
 
+### Zona configurada como noturna — não está neste status
+
+A lua do Guardian é a zona marcada para armar no stay (perímetro). Não é o tipo do sensor e não vem no `0x0B4A`.
+
+No SDK, essa lista é a máscara `<Zonas arme stay>` do status antigo `0x5D` (AMT 2018 E Smart, 134 bytes, bytes 57–62). Bit `1` = zona configurada para arme stay. Bit `0` = zona normal, fora do noturno. `<Zonas ativadas stay>` (bytes 87–92) no mesmo frame só diz se a zona está armada em stay agora. `<Tipo sensor>` também está só nesse `0x5D` e é outro campo.
+
+Nesta AMT 8000 o status é o `0x0B4A`. O mapa de 143 bytes não tem máscara de zona stay. O que já lemos é outra coisa:
+
+- Bit `6` da partição (`payload[21+i]`): a partição está armada em noturno agora. Não lista as zonas configuradas.
+- `payload[10:12]`: permissão de stay do usuário por partição. Não é a lua da zona.
+
+O `device_class` do sensor no Home Assistant é opção local do config flow. A central não envia esse tipo no `0x0B4A`.
+
+A leitura de memória por endereço (`0xE7`) é o protocolo antigo. O SDK aponta o mapa para outro documento e só lista faixas da AMT 2018, 4010 e 1016. Não enviar na porta 9009 desta central.
+
+Sem um frame novo, capturado quando o Guardian carrega os setores, o sensor HA não ganha atributo de zona noturna. Não usar um byte não mapeado do `0x0B4A` para isso.
+
 ## Dispositivos cadastrados — `0x0B50`
 
 `DISPOSITIVOS_CADASTRADOS` lista o que está gravado na central (RF). Não substitui o status: não diz se a zona está aberta nem se a PGM está ligada.
@@ -264,14 +281,36 @@ Payload:
 
 | Byte | Valor | Significado |
 |------|-------|-------------|
-| `partition_index` | `0x01`–`0x0F` | Partição individual |
-| `partition_index` | `0xFF` | Todas as partições |
+| `partition_index` | `0x01`–`0x0F` | Partição individual. Entidade HA `Partition N`: `0x02` é o noturno dessa partição. |
+| `partition_index` | `0xFF` | Todas as partições. Entidade HA `Panel`. Falha com `0x36` se alguma partição não tiver zona stay. |
 | `operation` | `0x00` | Desarmar |
 | `operation` | `0x01` | Armar total/away |
-| `operation` | `0x02` | Armar stay/parcial — documentado no projeto irmão, não validado localmente |
-| `operation` | `0x03` | Não utilizado; arme com zonas abertas usa bypass por zona e depois `0x01` |
+| `operation` | `0x02` | Armar stay/parcial. Entidades HA `Panel` e `Partition N` publicam como `armed_night`. Na partição 1 o noturno foi aceito com zona stay; `0xFF` falha se outra partição não tiver zona stay |
+| `operation` | `0x03` | Não utilizado; arme com zonas abertas usa bypass por zona e depois `0x01` ou `0x02` |
 
-O cliente atual usa `0x00` e `0x01`.
+O cliente HA usa `0x00`, `0x01` e `0x02` na partição individual e no Panel. No Panel, `0xFF` vale para os três comandos. O `0x02` numa partição sem zona stay volta `0x36` só para ela.
+
+Stay só arma zonas marcadas como perímetro na programação da central. Sem nenhuma zona stay na partição, `0x401E` com `operation=0x02` volta NACK. Captura local com partição `0xFF`:
+
+```text
+pedido:  00 00 8F E0 00 04 40 1E FF 02 37
+resposta: 8F E0 00 00 00 03 F0 FD 36 A8
+```
+
+Com zona stay configurada e o perímetro aberto, o mesmo pedido volta `0x27`:
+
+```text
+pedido:  00 00 8F E0 00 04 40 1E FF 02 37
+resposta: 8F E0 00 00 00 03 F0 FD 27 B9
+```
+
+| Código | Nome no SDK | Significado |
+|--------|-------------|-------------|
+| `0x36` (`54`) | `ERRO_PARTICAO_SEM_ZONAS_STAY` | Partição sem zona configurada para stay. Observado em `0xFF` quando só uma partição tem zona stay. A entidade que enviou o comando (Panel ou Partition N) cria a notificação "Modo noturno" e não muda o estado. |
+| `0x2F` (`47`) | `ERRO_SEM_PERMISSAO_ARME_STAY` | Usuário sem permissão de arme stay. Não observado. |
+| `0x27` (`39`) | `ERRO_ZONAS_ABERTAS` | Zona aberta. Observado no stay (`0xFF` + `0x02`) depois de existir zona stay. O Panel trata como zona aberta: notificação "Modo noturno" e a mesma política de bypass do arme total. O byte `0xF0` na resposta do arme continua sendo o outro formato de zona aberta. |
+
+O código vem da lista de NACK do SDK (aba da foto AMT 8000, coluna `W`). Para o stay passar, marque ao menos uma zona da partição como zona stay no teclado ou no software da Intelbras. Se só uma partição tiver essas zonas, não use `0xFF`: arme essa partição.
 
 ## Bypass — `0x401F`
 
@@ -291,7 +330,7 @@ O cliente envia uma requisição separada para cada zona. A confirmação deve s
 
 No Home Assistant, cada zona habilitada tem um `switch` (`Zone N Bypass`): ligado anula (`0x01`), desligado reativa (`0x00`). O estado segue a máscara de zonas em bypass do status.
 
-Para armar com zonas abertas, o fluxo validado é ativar o bypass de cada zona com `0x401F` e, em seguida, enviar `SYSTEM_ARM_DISARM` com `operation=0x01` (arme total/away). No Home Assistant, as duas operações são executadas pela mesma ação de arme quando `Allow Open Zone Bypass` está ligado; com o switch desligado, o arme é bloqueado e nenhuma zona é anulada. O utilitário não expõe um modo de arme forçado separado.
+Para armar com zonas abertas, o fluxo validado é ativar o bypass de cada zona com `0x401F` e, em seguida, enviar `SYSTEM_ARM_DISARM` com `operation=0x01` (arme total/away). O modo noturno do Panel repete esse fluxo e fecha com `operation=0x02`. No Home Assistant, as duas operações são executadas pela mesma ação de arme quando `Allow Open Zone Bypass` está ligado; com o switch desligado, o arme é bloqueado e nenhuma zona é anulada. O utilitário não expõe um modo de arme forçado separado.
 
 ## GET MAC — `0x3FAA`
 
