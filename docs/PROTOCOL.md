@@ -173,7 +173,8 @@ Máscaras de zona no SDK têm **64 bits** (8 bytes). O cliente HA ainda lê **56
 | `62–63` | 63–64 | Sirenes 1 e 2 | SDK; HA ainda não usa como status ao vivo por unidade. |
 | `64–69` | 65–70 | Relógio BCD | Dia, mês, ano, hora, minuto, segundo. Validado na captura. |
 | `70` | 71 | Pânico | SDK. |
-| `71–72` | 72–73 | Falhas gerais | AC, bateria, RF, Ethernet, etc. HA usa `payload[71] bit 1` como tamper da central. |
+| `71–72` | 72–73 | Falhas gerais | AC, bateria, RF, Ethernet, etc. HA usa só `payload[71]` bit 1, como atributo `tamper` da entidade Panel. Os outros bits não viram entidade. |
+| `73–80` | 74–81 | Falha de comunicação (sensor) | SDK. |
 | `73–80` | 74–81 | Falha de comunicação (sensor) | SDK. |
 | `81–82` | 82–83 | Falha teclado | SDK. |
 | `83–84` | 84–85 | Falha sirene | SDK; HA lê 16 bits para sirenes RF cadastradas (`fault`). Pendente captura com falha real. |
@@ -186,7 +187,7 @@ Máscaras de zona no SDK têm **64 bits** (8 bytes). O cliente HA ainda lê **56
 | `113–118` | 114–119 | Bateria teclado / sirene / repetidor | SDK. Hipótese HA: `113–114` teclado, `115–116` sirene RF (`low_battery`), `117–118` repetidor. Pendente captura. |
 | `119–120` | 120–121 | Bateria baixa PGM | 16 bits. HA lê para PGM cadastrada (`low_battery`). SDK; sem captura de falha real. |
 | `121–133` | 122–134 | Bateria keyfob | SDK. |
-| `134` | 135 | Bateria da central | `1` morta, `2` baixa, `3` média, `4` cheia. Validado. |
+| `134` | 135 | Bateria da central | `1` morta, `2` baixa, `3` média, `4` cheia. Validado. Atributo `battery` da entidade HA Panel, junto com `tamper`, `model` (`payload[0]`) e `firmware` (`payload[1:4]`). |
 | `135–136` | 136–137 | Sync RF | Tipo/índice do dispositivo no botão de sync (`0x06` = PGM). SDK. |
 | `137–138` | 138–139 | PGM ligada/desligada | 16 bits. Bit 0 = OFF, bit 1 = ON. `[137]` = índices 0–7, `[138]` = 8–15. Validado na PGM 0. HA usa. Não diz se a PGM existe. |
 | `139–142` | 140–143 | Fechadura | Estado, porta, falha, bateria. SDK. |

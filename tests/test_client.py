@@ -272,6 +272,27 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(siren.tamper)
         self.assertTrue(siren.low_battery)
 
+    def test_parse_panel_battery_full_and_tamper(self) -> None:
+        payload = bytearray(143)
+        payload[0] = 0x8B
+        payload[1] = 3
+        payload[2] = 2
+        payload[3] = 8
+        payload[71] = 0x02
+        payload[134] = 4
+        status = Amt8000Client._parse_status(bytes(payload))
+        self.assertEqual(status.battery, "full")
+        self.assertTrue(status.tamper)
+        self.assertEqual(status.model, 0x8B)
+        self.assertEqual(status.version, "3.2.8")
+
+    def test_parse_panel_battery_dead_without_tamper(self) -> None:
+        payload = bytearray(143)
+        payload[134] = 1
+        status = Amt8000Client._parse_status(bytes(payload))
+        self.assertEqual(status.battery, "dead")
+        self.assertFalse(status.tamper)
+
     def test_siren_off_sends_command(self) -> None:
         client = Amt8000Client("127.0.0.1", 9009, "1234")
         writer = self._stub_command_io(client)
